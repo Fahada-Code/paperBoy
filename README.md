@@ -1,5 +1,6 @@
 # paperBoy 🗞️
 
+[![CI](https://github.com/Fahada-Code/paperBoy/actions/workflows/ci.yml/badge.svg)](https://github.com/Fahada-Code/paperBoy/actions/workflows/ci.yml)
 
 A terminal AI research digest. Every morning it **fetches** new research (arXiv,
 and later HN / GitHub trending), **ranks** it against the topics you actually
