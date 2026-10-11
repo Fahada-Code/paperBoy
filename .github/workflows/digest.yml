@@ -1,0 +1,45 @@
+name: Daily digest
+
+# Runs the pipeline on a schedule using Ollama on the runner's CPU (no GPU, no
+# API key, no always-on machine). The PDF is uploaded as a downloadable artifact.
+on:
+  schedule:
+    - cron: "0 13 * * *"   # 13:00 UTC ~= 7am Edmonton (MDT) / 6am (MST)
+  workflow_dispatch: {}      # allow manual "Run workflow" from the Actions tab
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install paperBoy (base deps only — Ollama backend, no GPU extras)
+        run: python -m pip install -e .
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Serve, pull models, and generate the digest
+        run: |
+          # Start the Ollama server and keep it alive for this whole step.
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/version >/dev/null && break
+            sleep 1
+          done
+          ollama pull llama3.2:3b
+          ollama pull nomic-embed-text
+          paperboy run --config config.example.yaml --top 6
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-digest
+          path: digests/
+          if-no-files-found: error

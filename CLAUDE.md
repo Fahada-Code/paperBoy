@@ -53,8 +53,12 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       torch 2.6.0+cu124. Representative bench (Qwen2.5-1.5B 4-bit, RTX 4050, 24 req @ conc 12, 128 tok):
       batch=1 → 7.4 tok/s / p99 96.7s; batch=8 → 75.9 tok/s / p99 6.7s = ~10x throughput, +50MB VRAM.
       Note: batch=1 slowness is partly bnb per-op overhead at bs=1. Optional follow-up: fp16 comparison.
-- [ ] **Phase 4** — autonomy: Dockerize, schedule (GitHub Actions cron), cloud storage, metrics
-      (Prometheus/Grafana or structured stats), CI/CD.
+- [~] **Phase 4** — autonomy (IN PROGRESS). CI done (.github/workflows/ci.yml: pytest 3.11-3.13).
+      Scheduled digest done (.github/workflows/digest.yml): cron 13:00 UTC, installs Ollama on the
+      runner (CPU), pulls llama3.2:3b + nomic-embed-text, runs `paperboy run`, uploads PDF as an
+      artifact. DECISION (2026-10-10): chose GitHub Actions cron + Ollama-on-CPU (free, always-on,
+      no API key, no laptop) over hosted-API or local-scheduler. PENDING: confirm first green run
+      (trigger via Actions tab); optional: cache Ollama models, structured run metrics/logging.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
 
 Work one phase at a time. Each phase must end in a runnable, demoable win. Guard scope ruthlessly.
