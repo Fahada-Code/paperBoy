@@ -1,0 +1,37 @@
+# paperBoy configuration — copy to config.yaml and edit.
+# This drives what gets fetched, how it's ranked, and how the digest is written.
+
+# Topics you care about. Used in Phase 2 to rank fetched items by relevance
+# (embedding similarity against these phrases). Be specific.
+topics:
+  - "LLM inference optimization and serving"
+  - "quantization and model compression"
+  - "retrieval-augmented generation"
+  - "distributed systems and databases"
+
+# Where to pull from. Only arXiv is wired up first (free, no auth).
+sources:
+  arxiv:
+    enabled: true
+    categories: ["cs.LG", "cs.CL", "cs.DC"]
+    max_results: 60      # fetched per run before ranking
+  hackernews:
+    enabled: false
+  github_trending:
+    enabled: false
+
+# How many of the top-ranked items make it into the digest.
+top_n: 8
+
+# LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,
+# "local" is the RTX 4050 showcase path, "hosted" is a cloud API.
+backend:
+  kind: ollama          # one of: ollama | local | hosted
+  model: "llama3.2:3b"  # small + fast; upgrade to "qwen2.5:7b" for sharper summaries (needs ~5GB VRAM)
+  host: "http://localhost:11434"
+  timeout: 300          # seconds; first call cold-loads the model (~75s on a laptop GPU)
+
+# Output.
+output:
+  format: pdf           # pdf | markdown
+  dir: "./digests"
