@@ -25,6 +25,16 @@ jobs:
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
 
+      # Cache the pulled model blobs so cron runs don't re-download them every
+      # time. The models are fixed, so a static key is fine; bump the -vN suffix
+      # to bust the cache. On a hit the later "ollama pull" is a fast no-op that
+      # just verifies the manifest, so keeping the pull stays correct either way.
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-models-llama3.2-3b-nomic-embed-text-v1
+
       - name: Serve, pull models, and generate the digest
         run: |
           # Start the Ollama server and keep it alive for this whole step.

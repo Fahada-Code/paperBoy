@@ -1,6 +1,10 @@
-"""Tests for arXiv feed parsing (no network)."""
+"""Tests for arXiv feed parsing and fetch retry logic (no network)."""
 
-from paperboy.sources.arxiv import _clean, parse_feed
+import httpx
+import pytest
+
+from paperboy.sources import arxiv
+from paperboy.sources.arxiv import _clean, fetch_arxiv, parse_feed
 
 SAMPLE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -39,3 +43,55 @@ def test_parse_feed_extracts_fields():
 
 def test_parse_feed_empty():
     assert parse_feed('<feed xmlns="http://www.w3.org/2005/Atom"></feed>') == []
+
+
+def _patch_get(monkeypatch, responses):
+    """Make httpx.get yield each item in `responses` (an Exception is raised,
+    anything else is returned). Also no-op out the backoff sleep."""
+    calls = {"n": 0}
+
+    def fake_get(*args, **kwargs):
+        item = responses[calls["n"]]
+        calls["n"] += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(arxiv.httpx, "get", fake_get)
+    monkeypatch.setattr(arxiv.time, "sleep", lambda _s: None)
+    return calls
+
+
+class _FakeResp:
+    def __init__(self, text=SAMPLE_FEED):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+
+def test_fetch_retries_then_succeeds(monkeypatch):
+    calls = _patch_get(
+        monkeypatch,
+        [httpx.ReadTimeout("timed out"), httpx.ConnectError("refused"), _FakeResp()],
+    )
+    papers = fetch_arxiv(["cs.LG"], retries=3)
+    assert len(papers) == 1
+    assert calls["n"] == 3  # failed twice, succeeded on the third
+
+
+def test_fetch_raises_after_exhausting_retries(monkeypatch):
+    _patch_get(monkeypatch, [httpx.ReadTimeout("t")] * 3)
+    with pytest.raises(httpx.ReadTimeout):
+        fetch_arxiv(["cs.LG"], retries=3)
+
+
+def test_fetch_does_not_retry_4xx(monkeypatch):
+    err = httpx.HTTPStatusError(
+        "bad request", request=httpx.Request("GET", arxiv.ARXIV_API),
+        response=httpx.Response(400),
+    )
+    calls = _patch_get(monkeypatch, [err, _FakeResp()])
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_arxiv(["cs.LG"], retries=3)
+    assert calls["n"] == 1  # 4xx fails fast, no retry

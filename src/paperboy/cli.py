@@ -112,19 +112,29 @@ def run(
     else:
         typer.secho("  no topics configured - using most recent papers.", fg=typer.colors.YELLOW)
     try:
-        top = rank_papers(papers, cfg.topics, backend.embed, n)
+        top = rank_papers(papers, cfg.topics, backend.embed, n, cfg.min_score)
     except BackendError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"  selected top {len(top)}.")
+    if cfg.topics and not top:
+        typer.secho(
+            f"  no papers cleared the relevance floor (min_score={cfg.min_score}); "
+            "writing an empty brief.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.echo(f"  selected top {len(top)}.")
 
     # 3. summarize
     typer.echo("Summarizing...")
     items: list[DigestItem] = []
     for i, paper in enumerate(top, 1):
-        typer.echo(f"  [{i}/{len(top)}] {paper.title[:70]}")
+        # Show the relevance score so you can calibrate min_score from real runs.
+        tag = f"[{paper.score:.2f}] " if cfg.topics else ""
+        typer.echo(f"  [{i}/{len(top)}] {tag}{paper.title[:66]}")
+        source = f"Title: {paper.title}\n\nAbstract: {paper.abstract}"
         try:
-            summary = backend.summarize(paper.abstract, max_words=70)
+            summary = backend.summarize(source, max_words=70, topic=paper.matched_topic)
         except BackendError as exc:
             typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)

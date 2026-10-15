@@ -23,6 +23,12 @@ sources:
 # How many of the top-ranked items make it into the digest.
 top_n: 8
 
+# Relevance floor. Papers scoring below this (max cosine similarity to any of
+# your topics) are dropped, so a quiet day yields a short/empty brief instead of
+# irrelevant filler. 0.0 = off. Calibrate it: run once, read the per-paper scores
+# paperBoy prints, then set this just under your "clearly relevant" papers.
+min_score: 0.0
+
 # LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,
 # "local" is the RTX 4050 showcase path, "hosted" is a cloud API.
 backend:

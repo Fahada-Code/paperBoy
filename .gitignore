@@ -20,6 +20,11 @@ config.yaml
 digests/
 *.pdf
 
+# Claude Code / AI agent local files (settings, transcripts, local overrides).
+# CLAUDE.md is intentionally tracked (project guidance); everything else is local.
+.claude/
+.claude/settings.local.json
+
 # Tooling / OS
 .pytest_cache/
 .ruff_cache/

@@ -32,13 +32,6 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
-def _centroid(vectors: list[list[float]]) -> list[float]:
-    if not vectors:
-        return []
-    dim = len(vectors[0])
-    return [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
-
-
 def _dedup(papers: list[Paper]) -> list[Paper]:
     """Drop duplicate papers, keyed by arXiv id without the version suffix."""
     seen: set[str] = set()
@@ -56,8 +49,18 @@ def rank_papers(
     topics: list[str],
     embed: EmbedFn,
     top_n: int,
+    min_score: float = 0.0,
 ) -> list[Paper]:
-    """Return the `top_n` papers most relevant to `topics`, scored in place.
+    """Return up to `top_n` papers most relevant to `topics`, scored in place.
+
+    Each paper is scored by its *best* match across topics (the max cosine over
+    the individual topic embeddings), not the average. Averaging the topics into
+    one centroid blurs distinct interests together: a paper that nails one topic
+    scores poorly against the mush of all of them. Max-over-topics instead lets a
+    single strong match surface a paper, which is what you actually want.
+
+    Papers scoring below `min_score` are dropped entirely, so a slow day yields a
+    short (or empty) digest rather than irrelevant filler.
 
     With no topics configured, relevance is undefined, so we just return the most
     recent papers (the arXiv fetch is already sorted newest-first).
@@ -66,9 +69,16 @@ def rank_papers(
     if not topics:
         return papers[:top_n]
 
-    topic_centroid = _centroid([embed(t, prefix=QUERY_PREFIX) for t in topics])
+    topic_vecs = [(t, embed(t, prefix=QUERY_PREFIX)) for t in topics]
     for p in papers:
-        p.score = _cosine(embed(p.rank_text, prefix=DOC_PREFIX), topic_centroid)
+        doc_vec = embed(p.rank_text, prefix=DOC_PREFIX)
+        # Best match across topics: keep both the score and WHICH topic it was,
+        # so the summary can be grounded in the real match instead of guessing.
+        p.matched_topic, p.score = max(
+            ((t, _cosine(doc_vec, tv)) for t, tv in topic_vecs),
+            key=lambda ts: ts[1],
+        )
 
     papers.sort(key=lambda p: p.score, reverse=True)
-    return papers[:top_n]
+    ranked = [p for p in papers if p.score >= min_score]
+    return ranked[:top_n]

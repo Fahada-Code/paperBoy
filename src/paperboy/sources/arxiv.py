@@ -7,6 +7,7 @@ recently submitted papers in the configured categories and hand back plain
 
 from __future__ import annotations
 
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
@@ -14,6 +15,10 @@ import httpx
 
 ARXIV_API = "https://export.arxiv.org/api/query"
 _ATOM = "{http://www.w3.org/2005/Atom}"
+
+# arXiv occasionally times out or returns a transient 5xx. A single hiccup
+# should not kill a scheduled digest run, so we retry these with backoff.
+_RETRY_STATUS = frozenset({500, 502, 503, 504})
 
 
 @dataclass
@@ -26,6 +31,7 @@ class Paper:
     authors: list[str] = field(default_factory=list)
     primary_category: str = ""
     score: float = 0.0  # relevance, filled in by the ranker
+    matched_topic: str = ""  # the topic that scored highest, filled in by the ranker
 
     @property
     def rank_text(self) -> str:
@@ -37,8 +43,19 @@ def _clean(text: str | None) -> str:
     return " ".join((text or "").split())
 
 
-def fetch_arxiv(categories: list[str], max_results: int = 60, timeout: int = 30) -> list[Paper]:
-    """Return the most recently submitted papers across `categories`."""
+def fetch_arxiv(
+    categories: list[str],
+    max_results: int = 60,
+    timeout: int = 30,
+    retries: int = 3,
+    backoff: float = 2.0,
+) -> list[Paper]:
+    """Return the most recently submitted papers across `categories`.
+
+    Transient failures (timeouts, connection errors, 5xx) are retried up to
+    `retries` times with exponential backoff (`backoff`, 2*backoff, ...). A
+    non-transient error (e.g. a 4xx) is raised immediately.
+    """
     if not categories:
         return []
 
@@ -52,9 +69,24 @@ def fetch_arxiv(categories: list[str], max_results: int = 60, timeout: int = 30)
         "start": 0,
         "max_results": max_results,
     }
-    resp = httpx.get(ARXIV_API, params=params, timeout=timeout, follow_redirects=True)
-    resp.raise_for_status()
-    return parse_feed(resp.text)
+
+    last_exc: httpx.HTTPError | None = None
+    for attempt in range(retries):
+        try:
+            resp = httpx.get(ARXIV_API, params=params, timeout=timeout, follow_redirects=True)
+            resp.raise_for_status()
+            return parse_feed(resp.text)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _RETRY_STATUS:
+                raise  # 4xx etc. won't fix themselves - fail fast
+            last_exc = exc
+        except httpx.TransportError as exc:
+            last_exc = exc  # timeouts, connection errors - worth retrying
+        if attempt < retries - 1:
+            time.sleep(backoff * (2 ** attempt))
+
+    assert last_exc is not None  # loop only exits here after a caught error
+    raise last_exc
 
 
 def parse_feed(xml_text: str) -> list[Paper]:

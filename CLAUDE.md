@@ -44,9 +44,19 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
 - [x] **Phase 1** — pluggable LLM backend (`backends/`: Backend ABC + OllamaBackend + `get_backend`
       factory), config loader, live `summarize` (arg or stdin), `doctor` health check. Verified on
       Ollama `llama3.2:3b` on the RTX 4050 (~4s warm summary; ~75s first-call cold load).
-- [x] **Phase 2** — `run`: fetch (arXiv Atom API) → embed-rank vs topics (nomic-embed-text, cosine
-      to topic centroid, needs search_query:/search_document: prefixes) → dedup → summarize top N →
-      PDF (reportlab) or Markdown. Modules: sources/arxiv.py, rank.py, render.py. Verified live.
+- [x] **Phase 2** — `run`: fetch (arXiv Atom API) → embed-rank vs topics (nomic-embed-text, needs
+      search_query:/search_document: prefixes) → dedup → summarize top N → PDF (reportlab) or
+      Markdown. Modules: sources/arxiv.py, rank.py, render.py. Verified live.
+      QUALITY (2026-10-15): ranking scores each paper by its BEST match across topics (max cosine
+      over per-topic embeddings), NOT cosine to the averaged topic centroid - the centroid blurred
+      distinct interests and surfaced "random" papers. Added a relevance floor `min_score` (config,
+      default 0.0 = off): papers below it are dropped so a quiet day yields a short/empty brief, not
+      filler; `run` prints each paper's score for calibration; render.py emits an honest empty-state.
+      The ranker also records WHICH topic matched best (Paper.matched_topic); the summarizer is
+      grounded in that single topic (base.summarize(topic=...)) and told to admit a weak/tangential
+      link rather than invent one - fixes summaries fabricating a catch-all topic connection. The
+      matched topic is shown in the digest meta line. Verified live on qwen2.5:7b (Fahad's config,
+      min_score 0.60): borderline papers now self-report "connection not explicit / tangential".
 - [x] **Phase 3** — local GPU serving in `serving/` (engine.py = 4-bit bnb NF4 load + dynamic
       batching worker; server.py = FastAPI; benchmark.py = concurrent-load harness). `serve` + `bench`
       CLI cmds, `local` backend. bitsandbytes 4-bit works on Windows NATIVE (no WSL2 needed) with
@@ -57,9 +67,17 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       Scheduled digest done (.github/workflows/digest.yml): cron 13:00 UTC, installs Ollama on the
       runner (CPU), pulls llama3.2:3b + nomic-embed-text, runs `paperboy run`, uploads PDF as an
       artifact. DECISION (2026-10-10): chose GitHub Actions cron + Ollama-on-CPU (free, always-on,
-      no API key, no laptop) over hosted-API or local-scheduler. PENDING: confirm first green run
-      (trigger via Actions tab); optional: cache Ollama models, structured run metrics/logging.
+      no API key, no laptop) over hosted-API or local-scheduler. Scheduled digest CONFIRMED GREEN
+      (multiple successful cron runs Oct 11-15). HARDENING (2026-10-15): fetch_arxiv now retries
+      transient failures (timeouts, conn errors, 5xx) with exponential backoff - a single arXiv
+      read-timeout had killed the Oct 14 run. Ollama model blobs now cached in the workflow
+      (actions/cache on ~/.ollama/models). Deferred: structured run metrics/logging.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
+      DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
+      the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
+      (uncommitted in tree). asciinema demo = manual step for Fahad (needs his terminal+GPU+models);
+      script at docs/demo.md. Next quality steps after ranking: tune summarization prompt to explain
+      relevance; add a feedback log (mark good/bad) - the data that would later justify any fine-tune.
 
 Work one phase at a time. Each phase must end in a runnable, demoable win. Guard scope ruthlessly.
 
@@ -106,4 +124,4 @@ python -m venv .venv
 - Avoid non-ASCII in strings printed to the console (Windows code-page renders em-dashes as `?`).
 - Commit messages: imperative subject, note the phase. End with:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
-- Only commit/push when Fahad asks. Not yet pushed to a GitHub remote.
+- Only commit/push when Fahad asks. Remote: github.com/Fahada-Code/paperBoy (main tracks origin/main).

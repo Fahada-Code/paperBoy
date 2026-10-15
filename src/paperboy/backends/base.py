@@ -43,11 +43,24 @@ class Backend(ABC):
         """
         raise BackendError(f"{type(self).__name__} does not support embeddings.")
 
-    def summarize(self, text: str, *, max_words: int = 150) -> str:
-        """Summarize `text` in at most `max_words` words. Composed on top of generate()."""
+    def summarize(self, text: str, *, max_words: int = 150, topic: str | None = None) -> str:
+        """Summarize `text` in at most `max_words` words. Composed on top of generate().
+
+        If `topic` is given (the reader's best-matching interest, as judged by the
+        ranker), the summary ends with one short sentence on how the work relates to
+        it - explanation of relevance, not advice. The model is told to admit when
+        the connection is weak rather than invent one, keeping relevance honest.
+        """
         prompt = (
             f"Summarize the following in at most {max_words} words. "
-            f"Lead with the single most important point.\n\n{text}"
+            f"Lead with the single most important point."
         )
+        if topic:
+            prompt += (
+                f' This work was retrieved as a possible match for the reader\'s topic: "{topic}". '
+                "End with one short sentence on how it relates to that topic - but if the "
+                "connection is weak or tangential, say so plainly instead of overstating it."
+            )
+        prompt += f"\n\n{text}"
         # Low temperature: a summarizer should be faithful, not creative.
         return self.generate(prompt, system=SUMMARY_SYSTEM, temperature=0.2).strip()

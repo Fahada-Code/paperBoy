@@ -40,3 +40,26 @@ def test_rank_orders_by_similarity_to_topics():
     out = rank_papers([off_topic, relevant], topics=["gpu serving"], embed=fake_embed, top_n=2)
     assert out[0].arxiv_id == "gpu"
     assert out[0].score > out[1].score
+
+
+def test_rank_scores_by_best_topic_not_centroid_average():
+    # Two orthogonal topics. A paper matching ONE topic perfectly should score
+    # 1.0 (best match), not ~0.71 (cosine to the averaged centroid of both).
+    def fake_embed(text: str, *, prefix: str = "") -> list[float]:
+        t = text.lower()
+        return [1.0 if "gpu" in t else 0.0, 1.0 if "cook" in t else 0.0]
+
+    gpu = _paper("gpu", title="gpu inference", abstract="gpu")
+    out = rank_papers([gpu], topics=["gpu serving", "cooking"], embed=fake_embed, top_n=5)
+    assert out[0].score == 1.0
+    assert out[0].matched_topic == "gpu serving"  # records WHICH topic matched best
+
+
+def test_rank_min_score_drops_weak_matches():
+    def fake_embed(text: str, *, prefix: str = "") -> list[float]:
+        return [1.0 if "gpu" in text.lower() else 0.0, 0.0]
+
+    gpu = _paper("gpu", title="gpu inference", abstract="gpu")
+    food = _paper("food", title="cooking pasta", abstract="recipes")  # scores 0.0
+    out = rank_papers([gpu, food], topics=["gpu"], embed=fake_embed, top_n=5, min_score=0.5)
+    assert [p.arxiv_id for p in out] == ["gpu"]
