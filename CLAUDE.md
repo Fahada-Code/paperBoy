@@ -57,6 +57,16 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       link rather than invent one - fixes summaries fabricating a catch-all topic connection. The
       matched topic is shown in the digest meta line. Verified live on qwen2.5:7b (Fahad's config,
       min_score 0.60): borderline papers now self-report "connection not explicit / tangential".
+      LLM RELEVANCE GATE (2026-10-15, filter.py): after embedding rank, shortlist ~2x top_n
+      candidates and have the LLM judge each KEEP/DROP + one-line reason (fail-open on backend
+      error; config `llm_filter` default true; `run --filter/--no-filter` override). Embeddings
+      are blunt at the margin (on-topic FOLD and off-topic neural-PDE papers both scored 0.64);
+      the gate reliably drops the vocabulary-only matches. Guard: a small model sometimes emits
+      VERDICT: KEEP with a reason that says "irrelevant" - when they contradict, trust the reason
+      and drop. Verified live: gate cut 16 candidates to 6 genuinely-relevant papers. Known: a 7B
+      judge is noisy at the margin (occasionally drops a defensible paper like inference-time
+      scaling); a larger/hosted judge would be steadier. Modules now: sources/, rank.py, filter.py,
+      render.py. Tests: test_filter.py (verdict parsing, contradiction guard, fail-open, noop).
 - [x] **Phase 3** — local GPU serving in `serving/` (engine.py = 4-bit bnb NF4 load + dynamic
       batching worker; server.py = FastAPI; benchmark.py = concurrent-load harness). `serve` + `bench`
       CLI cmds, `local` backend. bitsandbytes 4-bit works on Windows NATIVE (no WSL2 needed) with

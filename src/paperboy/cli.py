@@ -16,6 +16,7 @@ import typer
 from . import __version__
 from .backends import BackendError, get_backend
 from .config import load_config
+from .filter import filter_relevant
 from .rank import rank_papers
 from .render import DigestItem, render_markdown, render_pdf
 from .sources import fetch_arxiv
@@ -79,11 +80,15 @@ def run(
     config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
     top_n: int = typer.Option(None, "--top", "-n", help="Override how many papers make the digest."),
     fmt: str = typer.Option(None, "--format", "-f", help="Override output format: pdf | markdown."),
+    llm_filter: bool = typer.Option(
+        None, "--filter/--no-filter", help="LLM relevance gate after embedding rank (overrides config)."
+    ),
 ) -> None:
     """Run the full pipeline: fetch -> rank -> summarize -> PDF digest."""
     cfg = load_config(config)
     n = top_n or cfg.top_n
     out_format = (fmt or cfg.output.format).lower()
+    use_filter = cfg.llm_filter if llm_filter is None else llm_filter
 
     try:
         backend = get_backend(cfg.backend)
@@ -106,19 +111,35 @@ def run(
         raise typer.Exit(code=1)
     typer.echo(f"  fetched {len(papers)} papers.")
 
-    # 2. rank
+    # 2. rank (embeddings). With the LLM gate on, shortlist more candidates than
+    # we need, then let the gate trim them back down to the top N.
     if cfg.topics:
         typer.echo(f"Ranking against {len(cfg.topics)} topics (embeddings)...")
     else:
         typer.secho("  no topics configured - using most recent papers.", fg=typer.colors.YELLOW)
+    gate_on = use_filter and bool(cfg.topics)
+    shortlist_n = min(max(n * 2, 12), cfg.arxiv.max_results) if gate_on else n
     try:
-        top = rank_papers(papers, cfg.topics, backend.embed, n, cfg.min_score)
+        ranked = rank_papers(papers, cfg.topics, backend.embed, shortlist_n, cfg.min_score)
     except BackendError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
+
+    # 2b. LLM relevance gate: keep/drop each shortlisted paper with a reason.
+    if gate_on and ranked:
+        typer.echo(f"Filtering {len(ranked)} candidates with the LLM relevance gate...")
+
+        def _show(p, keep: bool, reason: str) -> None:
+            mark = "keep" if keep else "drop"
+            typer.echo(f"  [{mark}] [{p.score:.2f}] {p.title[:55]} - {reason[:45]}")
+
+        ranked = filter_relevant(ranked, cfg.topics, backend.generate, on_verdict=_show)
+
+    top = ranked[:n]
     if cfg.topics and not top:
+        gate_note = " and LLM gate" if gate_on else ""
         typer.secho(
-            f"  no papers cleared the relevance floor (min_score={cfg.min_score}); "
+            f"  nothing cleared the relevance floor (min_score={cfg.min_score}){gate_note}; "
             "writing an empty brief.",
             fg=typer.colors.YELLOW,
         )

@@ -32,6 +32,7 @@ class Paper:
     primary_category: str = ""
     score: float = 0.0  # relevance, filled in by the ranker
     matched_topic: str = ""  # the topic that scored highest, filled in by the ranker
+    relevance_reason: str = ""  # one-line keep rationale, filled in by the LLM filter
 
     @property
     def rank_text(self) -> str:

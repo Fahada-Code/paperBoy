@@ -29,6 +29,12 @@ top_n: 8
 # paperBoy prints, then set this just under your "clearly relevant" papers.
 min_score: 0.0
 
+# LLM relevance gate. After embedding ranking, ask the LLM to judge each
+# shortlisted paper keep/drop with a reason - embeddings are blunt at the margin
+# and let through papers that merely share ML vocabulary. Costs a few extra short
+# LLM calls per run. true = on (recommended). Override per run with --no-filter.
+llm_filter: true
+
 # LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,
 # "local" is the RTX 4050 showcase path, "hosted" is a cloud API.
 backend:

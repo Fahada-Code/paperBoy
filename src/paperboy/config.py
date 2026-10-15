@@ -46,6 +46,10 @@ class Config:
     # dropped. 0.0 keeps everything (off) - calibrate it by running once and
     # reading the per-paper scores paperboy prints, then raise it.
     min_score: float = 0.0
+    # After embedding rank, have the LLM judge each shortlisted paper keep/drop.
+    # Embeddings are blunt at the margin; this gate catches papers that merely
+    # share ML vocabulary. Costs a few extra (short) LLM calls per run.
+    llm_filter: bool = True
     backend: BackendConfig = field(default_factory=BackendConfig)
     arxiv: ArxivConfig = field(default_factory=ArxivConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -91,6 +95,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         topics=list(data.get("topics", []) or []),
         top_n=int(data.get("top_n", 8)),
         min_score=float(data.get("min_score", 0.0)),
+        llm_filter=bool(data.get("llm_filter", True)),
         backend=backend,
         arxiv=arxiv,
         output=output,
