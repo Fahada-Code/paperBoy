@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
+from .reranker import Reranker, extract_features
 from .sources import Paper
 
 # Retrieval models like nomic-embed-text expect these task prefixes; without them
@@ -50,17 +51,24 @@ def rank_papers(
     embed: EmbedFn,
     top_n: int,
     min_score: float = 0.0,
+    reranker: Reranker | None = None,
 ) -> list[Paper]:
     """Return up to `top_n` papers most relevant to `topics`, scored in place.
 
-    Each paper is scored by its *best* match across topics (the max cosine over
-    the individual topic embeddings), not the average. Averaging the topics into
-    one centroid blurs distinct interests together: a paper that nails one topic
-    scores poorly against the mush of all of them. Max-over-topics instead lets a
-    single strong match surface a paper, which is what you actually want.
+    Each paper is matched by its *best* topic (the max cosine over the individual
+    topic embeddings), not the average. Averaging the topics into one centroid
+    blurs distinct interests together: a paper that nails one topic scores poorly
+    against the mush of all of them. Max-over-topics instead lets a single strong
+    match surface a paper, which is what you actually want.
+
+    The relevance *score* is the max cosine by default. If a trained `reranker` is
+    given, the score is instead its learned probability over the full distribution
+    of per-topic similarities (see reranker.py) - which can tell a sharp single
+    match from broad vocabulary overlap. The matched topic is unchanged either way.
 
     Papers scoring below `min_score` are dropped entirely, so a slow day yields a
-    short (or empty) digest rather than irrelevant filler.
+    short (or empty) digest rather than irrelevant filler. (Note: with a reranker,
+    scores are probabilities in [0, 1], so calibrate min_score accordingly.)
 
     With no topics configured, relevance is undefined, so we just return the most
     recent papers (the arXiv fetch is already sorted newest-first).
@@ -72,12 +80,12 @@ def rank_papers(
     topic_vecs = [(t, embed(t, prefix=QUERY_PREFIX)) for t in topics]
     for p in papers:
         doc_vec = embed(p.rank_text, prefix=DOC_PREFIX)
-        # Best match across topics: keep both the score and WHICH topic it was,
-        # so the summary can be grounded in the real match instead of guessing.
-        p.matched_topic, p.score = max(
-            ((t, _cosine(doc_vec, tv)) for t, tv in topic_vecs),
-            key=lambda ts: ts[1],
-        )
+        sims = [(_cosine(doc_vec, tv), t) for t, tv in topic_vecs]
+        best_sim, p.matched_topic = max(sims, key=lambda st: st[0])
+        if reranker is not None:
+            p.score = reranker.score(extract_features([s for s, _ in sims]))
+        else:
+            p.score = best_sim
 
     papers.sort(key=lambda p: p.score, reverse=True)
     ranked = [p for p in papers if p.score >= min_score]

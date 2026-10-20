@@ -105,11 +105,24 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       keep/drop). `paperboy rate <id> good|bad` (or interactive over the last digest via a
       last_digest.json manifest) adds GOLD human labels; `paperboy labels` prints running counts.
       Verified live: a run logged 16 gate labels (8/8), `rate` added gold labels, `labels` shows
-      them. Tests: test_feedback.py (roundtrip, corrupt-line skip, summarize, manifest). NEXT
-      (deferred, needs accumulated labels): train a small learned re-ranker on the weak labels
-      (quick win, fits 6GB easily), then QLoRA fine-tune of the local judge/summarizer as the
-      resume showpiece (QLoRA via the Phase 3 bitsandbytes/transformers stack -> GGUF -> Ollama
-      Modelfile), with a before/after eval vs the stock 7B. Keep it LOCAL (see Phase 2 decision).
+      them. Tests: test_feedback.py (roundtrip, corrupt-line skip, summarize, manifest).
+      LEARNED RE-RANKER (2026-10-20, reranker.py): pure-Python logistic regression (no numpy/
+      sklearn/GPU, same aesthetic as rank.py) over a fixed 5-dim feature vector of a paper's
+      per-topic cosine distribution (max, mean, min, std, gap=max-2nd). Rationale: raw max-cosine
+      can't tell a sharp single-topic match from broad vocabulary overlap; the distribution can.
+      `paperboy train-reranker` rebuilds features by re-embedding the logged title+abstract vs the
+      logged topics (so train/inference features match exactly), labels = keep/good(1) vs
+      drop/bad(0) with gold ratings overriding the weak gate label per arxiv_id; saves
+      data/reranker.json. rank_papers takes an optional reranker (scores become probabilities, so
+      min_score then applies to a 0-1 prob); `run` auto-loads it when use_reranker (config, default
+      true) and the file exists, else falls back to cosine. `--reranker/--no-reranker` override.
+      Tests: test_reranker.py (feature stats, toy-separation, stable sigmoid, save/load). STATUS:
+      infra complete + verified end-to-end, but DO NOT trust it until ~50+ labels (ideally with
+      gold ratings) - demo-trained on 16 it overfit and ranked worse than cosine, so the demo
+      model was deleted; it auto-activates once properly trained. NEXT: accumulate labels via daily
+      use + `rate`; then retrain and eval reranker-vs-cosine; later QLoRA the judge/summarizer as
+      the resume showpiece (Phase 3 bitsandbytes/transformers stack -> GGUF -> Ollama Modelfile),
+      with before/after eval vs stock 7B. Keep it LOCAL (see Phase 2 decision).
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted

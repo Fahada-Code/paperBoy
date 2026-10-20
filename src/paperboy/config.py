@@ -54,6 +54,10 @@ class Config:
     # The judge wants a sharp reasoner; the summarizer can be cheaper. Point this at
     # a larger local model (same Ollama host) to strengthen the gate independently.
     judge_model: str = ""
+    # Use the trained learned re-ranker (data_dir/reranker.json) for scoring when
+    # it exists. Falls back to raw embedding cosine when off or untrained. Train it
+    # with `paperboy train-reranker` once enough labels have accumulated.
+    use_reranker: bool = True
     # Where labels/feedback accumulate (JSONL + last-digest manifest). User-local
     # and gitignored, like digests/. This is the training data foundation.
     data_dir: str = "./data"
@@ -104,6 +108,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         min_score=float(data.get("min_score", 0.0)),
         llm_filter=bool(data.get("llm_filter", True)),
         judge_model=str(data.get("judge_model", "") or ""),
+        use_reranker=bool(data.get("use_reranker", True)),
         data_dir=str(data.get("data_dir", "./data") or "./data"),
         backend=backend,
         arxiv=arxiv,

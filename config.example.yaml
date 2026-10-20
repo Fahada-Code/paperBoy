@@ -41,10 +41,15 @@ llm_filter: true
 # cost on every summary, e.g.  judge_model: "qwen2.5:14b"
 judge_model: ""
 
+# Use the learned re-ranker (data_dir/reranker.json) for scoring when it has been
+# trained; otherwise fall back to raw embedding cosine. Train it with
+# `paperboy train-reranker` once labels accumulate. Override per run: --no-reranker.
+use_reranker: true
+
 # Where feedback/labels accumulate (gitignored, user-local). Every relevance-gate
 # verdict is logged here as a weak label; `paperboy rate` adds gold good/bad
-# labels. These are the training data for a future re-ranker or fine-tune;
-# `paperboy labels` prints the running count.
+# labels. These are the training data for the re-ranker (and a future fine-tune);
+# `paperboy labels` prints the running count, `paperboy train-reranker` learns.
 data_dir: "./data"
 
 # LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,

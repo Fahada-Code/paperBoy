@@ -27,11 +27,13 @@ from .feedback import (
     write_manifest,
 )
 from .filter import filter_relevant
-from .rank import rank_papers
+from .rank import DOC_PREFIX, QUERY_PREFIX, _cosine, rank_papers
+from .reranker import Reranker, extract_features, train_reranker
 from .render import DigestItem, render_markdown, render_pdf
 
 LABELS_FILE = "labels.jsonl"
 MANIFEST_FILE = "last_digest.json"
+RERANKER_FILE = "reranker.json"
 from .sources import fetch_arxiv
 
 app = typer.Typer(
@@ -96,12 +98,27 @@ def run(
     llm_filter: bool = typer.Option(
         None, "--filter/--no-filter", help="LLM relevance gate after embedding rank (overrides config)."
     ),
+    reranker_opt: bool = typer.Option(
+        None, "--reranker/--no-reranker", help="Use the learned re-ranker if trained (overrides config)."
+    ),
 ) -> None:
     """Run the full pipeline: fetch -> rank -> summarize -> PDF digest."""
     cfg = load_config(config)
     n = top_n or cfg.top_n
     out_format = (fmt or cfg.output.format).lower()
     use_filter = cfg.llm_filter if llm_filter is None else llm_filter
+    use_reranker = cfg.use_reranker if reranker_opt is None else reranker_opt
+
+    # Load the learned re-ranker if enabled and trained; otherwise fall back to
+    # raw embedding cosine (a bad/corrupt model file must never fail a run).
+    reranker: Reranker | None = None
+    if use_reranker and cfg.topics:
+        rpath = Path(cfg.data_dir) / RERANKER_FILE
+        if rpath.exists():
+            try:
+                reranker = Reranker.load(rpath)
+            except (OSError, ValueError, KeyError) as exc:
+                typer.secho(f"  (ignoring unreadable re-ranker: {exc})", fg=typer.colors.YELLOW, err=True)
 
     try:
         backend = get_backend(cfg.backend)
@@ -126,14 +143,16 @@ def run(
 
     # 2. rank (embeddings). With the LLM gate on, shortlist more candidates than
     # we need, then let the gate trim them back down to the top N.
-    if cfg.topics:
+    if cfg.topics and reranker is not None:
+        typer.echo(f"Ranking against {len(cfg.topics)} topics (learned re-ranker, trained on {reranker.n_train})...")
+    elif cfg.topics:
         typer.echo(f"Ranking against {len(cfg.topics)} topics (embeddings)...")
     else:
         typer.secho("  no topics configured - using most recent papers.", fg=typer.colors.YELLOW)
     gate_on = use_filter and bool(cfg.topics)
     shortlist_n = min(max(n * 2, 12), cfg.arxiv.max_results) if gate_on else n
     try:
-        ranked = rank_papers(papers, cfg.topics, backend.embed, shortlist_n, cfg.min_score)
+        ranked = rank_papers(papers, cfg.topics, backend.embed, shortlist_n, cfg.min_score, reranker)
     except BackendError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
@@ -295,6 +314,95 @@ def labels(
     typer.echo(f"  total events:   {counts['total']}")
     typer.echo(f"  gate keep/drop: {counts['gate_keep']} / {counts['gate_drop']}  (weak labels)")
     typer.echo(f"  rated good/bad: {counts['rating_good']} / {counts['rating_bad']}  (gold labels)")
+
+
+@app.command("train-reranker")
+def train_reranker_cmd(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    min_labels: int = typer.Option(20, "--min-labels", help="Refuse to train below this many examples."),
+) -> None:
+    """Train the learned re-ranker on accumulated labels (re-embeds stored papers).
+
+    Builds one example per labeled paper: features are the distribution of its
+    per-topic cosine similarities, the label is keep/good (1) vs drop/bad (0). A
+    human rating overrides the weak gate label for the same paper (gold wins).
+    Saves to data_dir/reranker.json, which `run` then uses automatically.
+    """
+    cfg = load_config(config)
+    events = load_events(Path(cfg.data_dir) / LABELS_FILE)
+    if not events:
+        typer.secho("No labels yet. Run `paperboy run` (and `paperboy rate`) first.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    # Gate events carry the features we need (abstract + topics); the last gate
+    # event per paper wins, then a human rating overrides its label if present.
+    gate_by_id: dict[str, dict] = {}
+    rating_by_id: dict[str, dict] = {}
+    for e in events:
+        if e.get("kind") == "gate":
+            gate_by_id[e["arxiv_id"]] = e
+        elif e.get("kind") == "rating":
+            rating_by_id[e["arxiv_id"]] = e
+
+    labeled: list[tuple[dict, int]] = []
+    for aid, g in gate_by_id.items():
+        if not g.get("topics") or not (g.get("abstract") or g.get("title")):
+            continue  # can't rebuild features without topics + text
+        label = 1 if g.get("verdict") == "keep" else 0
+        if aid in rating_by_id:
+            label = 1 if rating_by_id[aid].get("verdict") == "good" else 0
+        labeled.append((g, label))
+
+    pos = sum(lbl for _, lbl in labeled)
+    typer.echo(f"Usable labeled papers: {len(labeled)}  (relevant {pos} / not {len(labeled) - pos})")
+    if len(labeled) < min_labels:
+        typer.secho(
+            f"Need at least {min_labels} to train (have {len(labeled)}). Keep running/rating; "
+            "lower --min-labels to force.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if pos == 0 or pos == len(labeled):
+        typer.secho("Labels are all one class - can't learn a boundary yet.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        backend = get_backend(cfg.backend)
+    except BackendError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo("Re-embedding labeled papers to build features...")
+    topic_cache: dict[str, list[float]] = {}
+
+    def _topic_vec(topic: str) -> list[float]:
+        if topic not in topic_cache:
+            topic_cache[topic] = backend.embed(topic, prefix=QUERY_PREFIX)
+        return topic_cache[topic]
+
+    examples: list[tuple[list[float], int]] = []
+    try:
+        for g, label in labeled:
+            doc_vec = backend.embed(f"{g.get('title', '')}\n\n{g.get('abstract', '')}", prefix=DOC_PREFIX)
+            sims = [_cosine(doc_vec, _topic_vec(t)) for t in g["topics"]]
+            examples.append((extract_features(sims), label))
+    except BackendError as exc:
+        typer.secho(f"Error embedding: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    model = train_reranker(examples)
+    correct = sum(1 for feats, lbl in examples if (model.score(feats) >= 0.5) == bool(lbl))
+    acc = correct / len(examples)
+    out = Path(cfg.data_dir) / RERANKER_FILE
+    model.save(out)
+
+    typer.secho(f"Trained re-ranker on {model.n_train} examples; train accuracy {acc:.0%}.", fg=typer.colors.GREEN)
+    weights = ", ".join(f"{name}={w:+.2f}" for name, w in zip(("max", "mean", "min", "std", "gap"), model.weights))
+    typer.echo(f"  weights: {weights}")
+    typer.echo(f"  saved: {out}  (run will use it automatically)")
+    if model.n_train < 60:
+        typer.secho("  note: small training set - expect overfitting; keep rating to improve it.", fg=typer.colors.YELLOW)
 
 
 @app.command()
