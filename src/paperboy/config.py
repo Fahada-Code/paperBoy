@@ -50,6 +50,13 @@ class Config:
     # Embeddings are blunt at the margin; this gate catches papers that merely
     # share ML vocabulary. Costs a few extra (short) LLM calls per run.
     llm_filter: bool = True
+    # Model for the relevance judge. Empty = use the summary model (backend.model).
+    # The judge wants a sharp reasoner; the summarizer can be cheaper. Point this at
+    # a larger local model (same Ollama host) to strengthen the gate independently.
+    judge_model: str = ""
+    # Where labels/feedback accumulate (JSONL + last-digest manifest). User-local
+    # and gitignored, like digests/. This is the training data foundation.
+    data_dir: str = "./data"
     backend: BackendConfig = field(default_factory=BackendConfig)
     arxiv: ArxivConfig = field(default_factory=ArxivConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -96,6 +103,8 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         top_n=int(data.get("top_n", 8)),
         min_score=float(data.get("min_score", 0.0)),
         llm_filter=bool(data.get("llm_filter", True)),
+        judge_model=str(data.get("judge_model", "") or ""),
+        data_dir=str(data.get("data_dir", "./data") or "./data"),
         backend=backend,
         arxiv=arxiv,
         output=output,

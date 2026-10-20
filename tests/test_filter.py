@@ -28,15 +28,15 @@ def test_verdict_reason_overrides_contradictory_keep():
 
 def test_filter_keeps_only_approved_and_sets_reason():
     def fake_generate(prompt: str, *, system: str = "", temperature: float = 0.0) -> str:
-        # Drop the PDE paper, keep the rest. (Key on the title text, not the topic
-        # string, which appears in every prompt.)
-        if "pde" in prompt.lower():
+        # Drop the baking paper, keep the rest. Key on a title word that can't
+        # appear in the topics or the few-shot examples baked into the prompt.
+        if "sourdough" in prompt.lower():
             return "VERDICT: DROP\nREASON: only shares ML words"
         return "VERDICT: KEEP\nREASON: matches serving"
 
     gpu = _paper("gpu", "GPU inference serving")
-    pde = _paper("pde", "Neural PDE operators")
-    kept = filter_relevant([gpu, pde], topics=["gpu serving"], generate=fake_generate)
+    cook = _paper("cook", "Sourdough fermentation kinetics")
+    kept = filter_relevant([gpu, cook], topics=["gpu serving"], generate=fake_generate)
     assert [p.arxiv_id for p in kept] == ["gpu"]
     assert kept[0].relevance_reason == "matches serving"
 

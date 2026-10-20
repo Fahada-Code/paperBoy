@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import typer
@@ -16,9 +18,20 @@ import typer
 from . import __version__
 from .backends import BackendError, get_backend
 from .config import load_config
+from .feedback import (
+    LabelEvent,
+    append_events,
+    load_events,
+    read_manifest,
+    summarize_events,
+    write_manifest,
+)
 from .filter import filter_relevant
 from .rank import rank_papers
 from .render import DigestItem, render_markdown, render_pdf
+
+LABELS_FILE = "labels.jsonl"
+MANIFEST_FILE = "last_digest.json"
 from .sources import fetch_arxiv
 
 app = typer.Typer(
@@ -126,16 +139,56 @@ def run(
         raise typer.Exit(code=1)
 
     # 2b. LLM relevance gate: keep/drop each shortlisted paper with a reason.
+    # The judge can run a different (e.g. larger) local model than the summarizer.
+    judge_name = cfg.backend.model
+    gate_log: list[tuple[object, bool, str]] = []
     if gate_on and ranked:
-        typer.echo(f"Filtering {len(ranked)} candidates with the LLM relevance gate...")
+        judge_generate = backend.generate
+        if cfg.judge_model and cfg.judge_model != cfg.backend.model:
+            try:
+                judge_generate = get_backend(replace(cfg.backend, model=cfg.judge_model)).generate
+            except BackendError as exc:
+                typer.secho(f"Error building judge backend: {exc}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1)
+            judge_name = cfg.judge_model
+        typer.echo(f"Filtering {len(ranked)} candidates with the LLM relevance gate ({judge_name})...")
 
         def _show(p, keep: bool, reason: str) -> None:
             mark = "keep" if keep else "drop"
             typer.echo(f"  [{mark}] [{p.score:.2f}] {p.title[:55]} - {reason[:45]}")
+            gate_log.append((p, keep, reason))
 
-        ranked = filter_relevant(ranked, cfg.topics, backend.generate, on_verdict=_show)
+        ranked = filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show)
 
     top = ranked[:n]
+
+    # 2c. Capture gate verdicts as weak training labels (best-effort; never fail a
+    # run over logging). Both keeps and drops - a classifier needs negatives too.
+    if gate_log:
+        selected_ids = {p.arxiv_id for p in top}
+        events = [
+            LabelEvent(
+                kind="gate",
+                arxiv_id=p.arxiv_id,
+                title=p.title,
+                abstract=p.abstract,
+                url=p.url,
+                topics=cfg.topics,
+                matched_topic=p.matched_topic,
+                score=round(p.score, 4),
+                verdict="keep" if keep else "drop",
+                reason=reason,
+                selected=p.arxiv_id in selected_ids,
+                model=judge_name,
+            )
+            for p, keep, reason in gate_log
+        ]
+        try:
+            append_events(Path(cfg.data_dir) / LABELS_FILE, events)
+            typer.echo(f"  logged {len(events)} gate labels to {Path(cfg.data_dir) / LABELS_FILE}")
+        except OSError as exc:
+            typer.secho(f"  (could not write labels: {exc})", fg=typer.colors.YELLOW, err=True)
+
     if cfg.topics and not top:
         gate_note = " and LLM gate" if gate_on else ""
         typer.secho(
@@ -167,6 +220,81 @@ def run(
     else:
         path = render_pdf(items, cfg.output.dir)
     typer.secho(f"Digest written: {path}", fg=typer.colors.GREEN)
+
+    # Record what made this digest so `paperboy rate` can ask about it later.
+    if top:
+        try:
+            write_manifest(
+                Path(cfg.data_dir) / MANIFEST_FILE,
+                [{"arxiv_id": p.arxiv_id, "title": p.title, "url": p.url} for p in top],
+            )
+        except OSError:
+            pass  # manifest is a convenience; never fail a run over it
+
+
+@app.command()
+def rate(
+    arxiv_id: str = typer.Argument(None, help="Paper id to rate. Omit for interactive mode over the last digest."),
+    verdict: str = typer.Argument(None, help="good | bad (required when arxiv_id is given)."),
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    note: str = typer.Option("", "--note", help="Optional note stored with the rating."),
+) -> None:
+    """Record your good/bad judgment on digest papers - the gold labels for training.
+
+    `paperboy rate 2610.12345 good` rates one paper; `paperboy rate` with no args
+    walks the most recent digest and asks about each paper.
+    """
+    cfg = load_config(config)
+    labels_path = Path(cfg.data_dir) / LABELS_FILE
+
+    def _record(aid: str, v: str, title: str = "", url: str = "", reason: str = "") -> None:
+        append_events(
+            labels_path,
+            [LabelEvent(kind="rating", arxiv_id=aid, title=title, url=url, verdict=v, reason=reason)],
+        )
+
+    # Direct, scriptable form.
+    if arxiv_id is not None:
+        v = (verdict or "").lower()
+        if v not in ("good", "bad"):
+            typer.secho("Verdict must be 'good' or 'bad'.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        _record(arxiv_id, v, reason=note)
+        typer.secho(f"Recorded: {arxiv_id} -> {v}", fg=typer.colors.GREEN)
+        return
+
+    # Interactive form over the last digest.
+    manifest = read_manifest(Path(cfg.data_dir) / MANIFEST_FILE)
+    if not manifest:
+        typer.secho("No recent digest found. Run `paperboy run` first.", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Rating {len(manifest)} papers from the last digest ([g]ood / [b]ad / [s]kip):")
+    rated = 0
+    for item in manifest:
+        choice = typer.prompt(f"  {item['title'][:70]}", default="s").strip().lower()
+        v = {"g": "good", "good": "good", "b": "bad", "bad": "bad"}.get(choice)
+        if v is None:
+            continue
+        _record(item["arxiv_id"], v, title=item.get("title", ""), url=item.get("url", ""))
+        rated += 1
+    typer.secho(f"Recorded {rated} ratings to {labels_path}", fg=typer.colors.GREEN)
+
+
+@app.command()
+def labels(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+) -> None:
+    """Show how many training labels have accumulated in the label store."""
+    cfg = load_config(config)
+    labels_path = Path(cfg.data_dir) / LABELS_FILE
+    counts = summarize_events(load_events(labels_path))
+    if counts["total"] == 0:
+        typer.secho(f"No labels yet at {labels_path}. Run `paperboy run` to start logging.", fg=typer.colors.YELLOW)
+        return
+    typer.echo(f"Label store: {labels_path}")
+    typer.echo(f"  total events:   {counts['total']}")
+    typer.echo(f"  gate keep/drop: {counts['gate_keep']} / {counts['gate_drop']}  (weak labels)")
+    typer.echo(f"  rated good/bad: {counts['rating_good']} / {counts['rating_bad']}  (gold labels)")
 
 
 @app.command()

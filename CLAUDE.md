@@ -67,6 +67,20 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       judge is noisy at the margin (occasionally drops a defensible paper like inference-time
       scaling); a larger/hosted judge would be steadier. Modules now: sources/, rank.py, filter.py,
       render.py. Tests: test_filter.py (verdict parsing, contradiction guard, fail-open, noop).
+      JUDGE UPGRADE (2026-10-20): (1) decoupled the judge model from the summarizer - config
+      `judge_model` (empty = reuse backend.model); cli builds a second backend via
+      dataclasses.replace(cfg.backend, model=judge_model) so the gate can run a larger local
+      model than summaries. (2) Sharpened the 7B judge with a 3-example few-shot block + a
+      THOUGHT reasoning line before the verdict (filter.py _FEWSHOT): Example A keep, B drops a
+      vocabulary-only match (neural-PDE), C drops an ADJACENT-but-unlisted subfield (bilevel
+      optimization / meta-learning). Verified live: C fixed the judge's invented-adjacency
+      over-keeps (bilevel-opt and ARC-AGI papers now correctly dropped). Remaining 7B borderline
+      calls (e.g. PEFT-for-brain-encoding kept under "model compression") are the small-model
+      ceiling - raise it by pulling a bigger model and setting judge_model, now that it's wired.
+      DECISION (2026-10-20): judge stays LOCAL, not a hosted API. This project is a resume/portfolio
+      showcase; a self-hosted inference pipeline on Fahad's own GPU is the more impressive (and
+      principle-consistent) story than calling a paid API. "hosted" backend remains unimplemented
+      by choice. Don't add a hosted/paid dependency unless Fahad asks.
 - [x] **Phase 3** — local GPU serving in `serving/` (engine.py = 4-bit bnb NF4 load + dynamic
       batching worker; server.py = FastAPI; benchmark.py = concurrent-load harness). `serve` + `bench`
       CLI cmds, `local` backend. bitsandbytes 4-bit works on Windows NATIVE (no WSL2 needed) with
@@ -82,6 +96,20 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       transient failures (timeouts, conn errors, 5xx) with exponential backoff - a single arXiv
       read-timeout had killed the Oct 14 run. Ollama model blobs now cached in the workflow
       (actions/cache on ~/.ollama/models). Deferred: structured run metrics/logging.
+- [~] **Phase 6** — training data foundation (feedback loop). DECISION (2026-10-20): before any
+      fine-tune/re-ranker, capture labels - training's real bottleneck is data, not compute. New
+      module feedback.py + `data_dir` config (default ./data, gitignored). `run` now logs every
+      relevance-gate verdict (keep AND drop) to data/labels.jsonl as a weak LabelEvent carrying
+      title/abstract/topics/matched_topic/score/verdict/reason/selected/model/ts - enough to train
+      a re-ranker (score,matched_topic -> verdict) OR a judge fine-tune (title+abstract+topics ->
+      keep/drop). `paperboy rate <id> good|bad` (or interactive over the last digest via a
+      last_digest.json manifest) adds GOLD human labels; `paperboy labels` prints running counts.
+      Verified live: a run logged 16 gate labels (8/8), `rate` added gold labels, `labels` shows
+      them. Tests: test_feedback.py (roundtrip, corrupt-line skip, summarize, manifest). NEXT
+      (deferred, needs accumulated labels): train a small learned re-ranker on the weak labels
+      (quick win, fits 6GB easily), then QLoRA fine-tune of the local judge/summarizer as the
+      resume showpiece (QLoRA via the Phase 3 bitsandbytes/transformers stack -> GGUF -> Ollama
+      Modelfile), with a before/after eval vs the stock 7B. Keep it LOCAL (see Phase 2 decision).
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted

@@ -19,9 +19,41 @@ GenerateFn = Callable[..., str]
 
 JUDGE_SYSTEM = (
     "You are a strict relevance filter for a technical research digest. You decide "
-    "whether a paper genuinely matches at least one of the reader's topics. A paper "
-    "that only shares generic machine-learning vocabulary is NOT a match - be willing "
-    "to drop it. You never give advice or predictions; you only classify relevance."
+    "whether a paper genuinely matches at least one of the reader's topics. Sharing "
+    "the broad field (machine learning) is NOT enough - a paper that only shares "
+    "generic ML vocabulary must be dropped. Judge the paper's actual subject against "
+    "the specific topics. You never give advice or predictions; you only classify."
+)
+
+# Two worked examples steady a small model at the margin (where embeddings and a
+# 7B judge both wobble): one clear keep, one paper that shares ML words but is
+# off-topic. The reasoning line forces the model to commit to a subject before
+# voting, which cuts the "share vocabulary -> keep" failure mode.
+_FEWSHOT = (
+    "Example A\n"
+    "Reader's topics: LLM inference optimization and serving; quantization.\n"
+    "Title: FOLD: Far Memory for Long-Context Speculative Decoding\n"
+    "Abstract: Speeds up LLM decoding by treating distant KV-cache entries as far memory.\n"
+    "THOUGHT: Speculative decoding is squarely LLM inference optimization.\n"
+    "VERDICT: KEEP\n"
+    "REASON: directly optimizes LLM inference/serving\n"
+    "\n"
+    "Example B\n"
+    "Reader's topics: LLM inference optimization and serving; quantization.\n"
+    "Title: ReAl: Refine neural operators via aligning dynamical flow\n"
+    "Abstract: Improves neural-PDE surrogates for physical simulation stability.\n"
+    "THOUGHT: Neural-PDE solvers only share ML words; unrelated to LLM serving or quantization.\n"
+    "VERDICT: DROP\n"
+    "REASON: neural-PDE work, no link to the topics\n"
+    "\n"
+    "Example C\n"
+    "Reader's topics: LLM inference optimization and serving; quantization.\n"
+    "Title: Accelerated Newton Methods for Bilevel Optimization in Meta-Learning\n"
+    "Abstract: Faster convergence for bilevel optimization and hyperparameter tuning.\n"
+    "THOUGHT: Optimization theory for meta-learning is a different ML subfield - it is not "
+    "one of the listed topics, even though it is adjacent.\n"
+    "VERDICT: DROP\n"
+    "REASON: optimization/meta-learning, not a listed topic\n"
 )
 
 
@@ -86,10 +118,14 @@ def filter_relevant(
     kept: list[Paper] = []
     for p in papers:
         prompt = (
-            f"Reader's topics: {topic_list}.\n\n"
-            f"Paper:\nTitle: {p.title}\nAbstract: {p.abstract}\n\n"
-            "Is this paper genuinely relevant to at least one topic? Reply in exactly "
-            "two lines:\nVERDICT: KEEP or DROP\nREASON: (15 words max)"
+            f"{_FEWSHOT}\n"
+            "Now judge this paper the same way.\n"
+            f"Reader's topics: {topic_list}.\n"
+            f"Title: {p.title}\nAbstract: {p.abstract}\n\n"
+            "Reply in exactly three lines:\n"
+            "THOUGHT: (one sentence naming the paper's actual subject vs the topics)\n"
+            "VERDICT: KEEP or DROP\n"
+            "REASON: (15 words max)"
         )
         try:
             reply = generate(prompt, system=JUDGE_SYSTEM, temperature=0.0)

@@ -35,6 +35,18 @@ min_score: 0.0
 # LLM calls per run. true = on (recommended). Override per run with --no-filter.
 llm_filter: true
 
+# Model for the relevance judge. Empty = reuse the summary model (backend.model
+# below). The judge benefits from a sharper reasoner, so you can point it at a
+# larger local model than the summarizer (same Ollama host) without paying that
+# cost on every summary, e.g.  judge_model: "qwen2.5:14b"
+judge_model: ""
+
+# Where feedback/labels accumulate (gitignored, user-local). Every relevance-gate
+# verdict is logged here as a weak label; `paperboy rate` adds gold good/bad
+# labels. These are the training data for a future re-ranker or fine-tune;
+# `paperboy labels` prints the running count.
+data_dir: "./data"
+
 # LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,
 # "local" is the RTX 4050 showcase path, "hosted" is a cloud API.
 backend:

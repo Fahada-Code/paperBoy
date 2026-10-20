@@ -20,6 +20,9 @@ config.yaml
 digests/
 *.pdf
 
+# paperBoy labels / feedback (user-local training data)
+data/
+
 # Claude Code / AI agent local files (settings, transcripts, local overrides).
 # CLAUDE.md is intentionally tracked (project guidance); everything else is local.
 .claude/

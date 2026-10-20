@@ -11,6 +11,16 @@ def test_missing_file_uses_defaults(tmp_path):
     assert cfg.top_n == 8
     assert cfg.topics == []
     assert cfg.arxiv.enabled is True
+    assert cfg.llm_filter is True
+    assert cfg.judge_model == ""  # empty = judge uses the summary model
+
+
+def test_judge_model_loads(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text("judge_model: qwen2.5:14b\nllm_filter: false\n", encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.judge_model == "qwen2.5:14b"
+    assert cfg.llm_filter is False
 
 
 def test_partial_config_overrides_only_given_keys(tmp_path):
