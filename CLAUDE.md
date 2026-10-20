@@ -145,6 +145,21 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       OR skip the re-ranker and invest training effort in a QLoRA fine-tune of the judge/summarizer
       on gold `rate` labels (Phase 3 bitsandbytes stack -> GGUF -> Ollama), with before/after eval.
       Keep collecting gold labels via daily use + `rate`. Keep it LOCAL (see Phase 2 decision).
+      QLORA PIPELINE (2026-10-20): built the judge fine-tune infra (did NOT run a real train - 120
+      mostly-weak labels would overfit like the re-ranker; gated on more/gold data). New:
+      training/dataset.py (pure stdlib: label store -> (prompt->completion) judge instruction
+      examples; gold ratings override weak gate labels; no few-shot in the train prompt since the
+      model internalizes the task); `paperboy export-train` writes judge.train/val.jsonl with a
+      readiness warning; training/train_judge.py = QLoRA script (4-bit NF4 + LoRA + grad
+      checkpointing + paged_adamw_8bit, 1.5B base fits 6GB, 7B tight), heavy imports lazy so
+      `--dry-run` validates data with no ML deps; `[train]` extra in pyproject (peft/datasets/trl,
+      reuses [local] torch/transformers/bnb); docs/finetuning.md (collect -> export -> train ->
+      merge -> GGUF -> Ollama Modelfile -> judge_model). Verified: 42 tests pass; export-train gave
+      102 train/18 val from current labels; dry-run prints a correct example. DEPLOY GAP (documented):
+      filter.py always sends its few-shot prompt; to use a fine-tuned judge with the lighter
+      no-few-shot prompt, add a branch that drops few-shot when judge_model is a tuned model.
+      NEXT: accumulate 200+ labels incl 20+ gold via daily use + collect-labels + rate, then run the
+      QLoRA train and compare tuned-vs-stock judge on the val split; ship only if it clearly wins.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
