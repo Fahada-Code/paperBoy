@@ -119,10 +119,32 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       Tests: test_reranker.py (feature stats, toy-separation, stable sigmoid, save/load). STATUS:
       infra complete + verified end-to-end, but DO NOT trust it until ~50+ labels (ideally with
       gold ratings) - demo-trained on 16 it overfit and ranked worse than cosine, so the demo
-      model was deleted; it auto-activates once properly trained. NEXT: accumulate labels via daily
-      use + `rate`; then retrain and eval reranker-vs-cosine; later QLoRA the judge/summarizer as
-      the resume showpiece (Phase 3 bitsandbytes/transformers stack -> GGUF -> Ollama Modelfile),
-      with before/after eval vs stock 7B. Keep it LOCAL (see Phase 2 decision).
+      model was deleted; it auto-activates once properly trained.
+      DATA + EVAL (2026-10-20): to unblock training without waiting weeks for daily labels, two
+      additions. (1) `paperboy collect-labels --pool N`: fetch N papers, embed-rank (no floor, full
+      spectrum), run the gate over all N, log every verdict - bulk-generates weak labels in one
+      sitting to DISTILL the gate into the re-ranker. No digest produced. Honest ceiling: distilling
+      the 7B gate makes the re-ranker FAST (replaces ~16 LLM calls/run with a microsecond
+      classifier), not smarter than the gate - gold `rate` labels are what beat the gate. (2)
+      train-reranker now does a deterministic holdout eval (reranker.py train_test_split /
+      best_cosine_threshold / accuracy): trains on a split, compares re-ranker@0.5 vs a TUNED
+      cosine-threshold baseline on the unseen rest, prints "beats/ties/trails", then retrains on all
+      data for the shipped model. Gate-event logging factored into cli._log_gate_events (shared by
+      run + collect-labels). Tests: 36 total.
+      RESULT (2026-10-20, NEGATIVE - honest): collected 120 gate labels via collect-labels, trained
+      the re-ranker, holdout eval (n_test=30): re-ranker 57% vs TUNED cosine baseline 63% (thr 0.61)
+      -> re-ranker TRAILS cosine; train acc 66% ~= majority-class baseline (75/120 drop = 62.5%);
+      learned weights went backwards (max=-0.49, mean=+0.99). Conclusion: distilling the gate into
+      the 5 cosine-distribution features (max/mean/min/std/gap) does NOT beat plain max-cosine - the
+      gate's signal lives in the ABSTRACT TEXT it reads, not in the shape of the embedding
+      similarities, so these features can't reproduce it. The 5-feature re-ranker as a cosine-only
+      model is a dead end. Underperforming model deleted; digests stay on cosine + LLM gate (which
+      already produce clean digests). The eval harness + collect-labels + 141-event label store all
+      stand and are the real artifacts. NEXT (revised): to actually beat cosine a re-ranker needs
+      richer features - the full doc embedding (768-d), which needs ~1000+ labels to not overfit -
+      OR skip the re-ranker and invest training effort in a QLoRA fine-tune of the judge/summarizer
+      on gold `rate` labels (Phase 3 bitsandbytes stack -> GGUF -> Ollama), with before/after eval.
+      Keep collecting gold labels via daily use + `rate`. Keep it LOCAL (see Phase 2 decision).
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted

@@ -35,6 +35,17 @@ dev = [
     "pytest>=8.0",
 ]
 
+# QLoRA fine-tuning of the local judge (Phase 6). Reuses the `local` extra's
+# torch/transformers/bitsandbytes (torch from the CUDA index) and adds the
+# training-specific libs. Install with:  pip install -e ".[train,local]"
+train = [
+    "peft>=0.11",
+    "datasets>=2.19",
+    "trl>=0.9",
+    "transformers>=4.44",
+    "accelerate>=0.33",
+]
+
 [project.urls]
 Homepage = "https://github.com/Fahada-Code/paperBoy"
 Repository = "https://github.com/Fahada-Code/paperBoy"

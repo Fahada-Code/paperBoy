@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 # The feature vector is summary stats of a paper's per-topic cosine similarities.
 FEATURE_NAMES = ("max", "mean", "min", "std", "gap")
@@ -140,3 +142,48 @@ def train_reranker(
         n_train=n,
         created=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+
+
+# --- Evaluation helpers -----------------------------------------------------
+# A trained re-ranker is only worth shipping if it beats the plain cosine
+# baseline on data it has not seen, so train-reranker holds out a slice and
+# compares the two. These stay pure (no I/O) so they are unit-testable.
+
+Example = tuple[list[float], int]
+
+
+def train_test_split(
+    examples: list[Example], test_frac: float = 0.25, seed: int = 0
+) -> tuple[list[Example], list[Example]]:
+    """Deterministically shuffle and split into (train, test). For tiny sets
+    (< 4) everything goes to train and test is empty (nothing to measure)."""
+    if len(examples) < 4:
+        return list(examples), []
+    idx = list(range(len(examples)))
+    random.Random(seed).shuffle(idx)
+    n_test = max(1, round(len(examples) * test_frac))
+    test = [examples[i] for i in idx[:n_test]]
+    train = [examples[i] for i in idx[n_test:]]
+    return train, test
+
+
+def accuracy(predict: Callable[[list[float]], bool], examples: list[Example]) -> float:
+    """Fraction of examples whose predicted class matches the label."""
+    if not examples:
+        return 0.0
+    return sum(1 for f, lbl in examples if bool(predict(f)) == bool(lbl)) / len(examples)
+
+
+def best_cosine_threshold(examples: list[Example]) -> float:
+    """The max-cosine (feature[0]) threshold that best classifies `examples` - a
+    fair, tuned baseline to compare the learned re-ranker against."""
+    if not examples:
+        return 0.5
+    values = sorted({f[0] for f, _ in examples})
+    candidates = [0.0] + [(a + b) / 2 for a, b in zip(values, values[1:])] + [1.0]
+    best_t, best_acc = 0.5, -1.0
+    for t in candidates:
+        acc = accuracy(lambda f, t=t: f[0] >= t, examples)
+        if acc > best_acc:
+            best_acc, best_t = acc, t
+    return best_t

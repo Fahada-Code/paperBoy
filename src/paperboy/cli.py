@@ -28,12 +28,49 @@ from .feedback import (
 )
 from .filter import filter_relevant
 from .rank import DOC_PREFIX, QUERY_PREFIX, _cosine, rank_papers
-from .reranker import Reranker, extract_features, train_reranker
+from .reranker import (
+    Reranker,
+    accuracy,
+    best_cosine_threshold,
+    extract_features,
+    train_reranker,
+    train_test_split,
+)
 from .render import DigestItem, render_markdown, render_pdf
 
 LABELS_FILE = "labels.jsonl"
 MANIFEST_FILE = "last_digest.json"
 RERANKER_FILE = "reranker.json"
+
+
+def _log_gate_events(cfg, judge_name: str, gate_log: list, selected_ids: set[str]) -> None:
+    """Append gate verdicts to the label store as weak training labels (both keeps
+    and drops - a classifier needs negatives). Best-effort: never fail over logging."""
+    if not gate_log:
+        return
+    path = Path(cfg.data_dir) / LABELS_FILE
+    events = [
+        LabelEvent(
+            kind="gate",
+            arxiv_id=p.arxiv_id,
+            title=p.title,
+            abstract=p.abstract,
+            url=p.url,
+            topics=cfg.topics,
+            matched_topic=p.matched_topic,
+            score=round(p.score, 4),
+            verdict="keep" if keep else "drop",
+            reason=reason,
+            selected=p.arxiv_id in selected_ids,
+            model=judge_name,
+        )
+        for p, keep, reason in gate_log
+    ]
+    try:
+        append_events(path, events)
+        typer.echo(f"  logged {len(events)} gate labels to {path}")
+    except OSError as exc:
+        typer.secho(f"  (could not write labels: {exc})", fg=typer.colors.YELLOW, err=True)
 from .sources import fetch_arxiv
 
 app = typer.Typer(
@@ -181,32 +218,8 @@ def run(
 
     top = ranked[:n]
 
-    # 2c. Capture gate verdicts as weak training labels (best-effort; never fail a
-    # run over logging). Both keeps and drops - a classifier needs negatives too.
-    if gate_log:
-        selected_ids = {p.arxiv_id for p in top}
-        events = [
-            LabelEvent(
-                kind="gate",
-                arxiv_id=p.arxiv_id,
-                title=p.title,
-                abstract=p.abstract,
-                url=p.url,
-                topics=cfg.topics,
-                matched_topic=p.matched_topic,
-                score=round(p.score, 4),
-                verdict="keep" if keep else "drop",
-                reason=reason,
-                selected=p.arxiv_id in selected_ids,
-                model=judge_name,
-            )
-            for p, keep, reason in gate_log
-        ]
-        try:
-            append_events(Path(cfg.data_dir) / LABELS_FILE, events)
-            typer.echo(f"  logged {len(events)} gate labels to {Path(cfg.data_dir) / LABELS_FILE}")
-        except OSError as exc:
-            typer.secho(f"  (could not write labels: {exc})", fg=typer.colors.YELLOW, err=True)
+    # 2c. Capture gate verdicts as weak training labels.
+    _log_gate_events(cfg, judge_name, gate_log, selected_ids={p.arxiv_id for p in top})
 
     if cfg.topics and not top:
         gate_note = " and LLM gate" if gate_on else ""
@@ -316,10 +329,120 @@ def labels(
     typer.echo(f"  rated good/bad: {counts['rating_good']} / {counts['rating_bad']}  (gold labels)")
 
 
+@app.command("export-train")
+def export_train_cmd(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    val_frac: float = typer.Option(0.15, "--val-frac", help="Fraction held out for validation."),
+    out_dir: str = typer.Option("", "--out", help="Output dir (default: <data_dir>/train)."),
+) -> None:
+    """Export the label store as a QLoRA instruction dataset for the judge fine-tune.
+
+    Writes judge.train.jsonl / judge.val.jsonl of (prompt -> completion) examples,
+    gold ratings overriding weak gate labels. Feed these to
+    `python -m paperboy.training.train_judge`.
+    """
+    from .training.dataset import build_judge_examples, split_examples, write_jsonl
+
+    cfg = load_config(config)
+    events = load_events(Path(cfg.data_dir) / LABELS_FILE)
+    if not events:
+        typer.secho("No labels yet. Run `paperboy run` / `collect-labels` / `rate` first.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    examples = build_judge_examples(events)
+    if not examples:
+        typer.secho("No usable examples (need gate labels carrying topics + text).", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    train, val = split_examples(examples, val_frac)
+    out = Path(out_dir) if out_dir else Path(cfg.data_dir) / "train"
+    write_jsonl(out / "judge.train.jsonl", train)
+    write_jsonl(out / "judge.val.jsonl", val)
+
+    pos = sum(e["label"] for e in examples)
+    gold = sum(1 for e in examples if e["source"] == "rating")
+    typer.secho(f"Exported {len(examples)} examples (relevant {pos} / not {len(examples) - pos}; gold {gold}).", fg=typer.colors.GREEN)
+    typer.echo(f"  train: {out / 'judge.train.jsonl'} ({len(train)})")
+    typer.echo(f"  val:   {out / 'judge.val.jsonl'} ({len(val)})")
+    if len(examples) < 200 or gold < 20:
+        typer.secho(
+            "  note: this is light for an LLM fine-tune (aim for 200+, with 20+ gold `rate` labels). "
+            "Validate the data now with:\n"
+            f"    python -m paperboy.training.train_judge --train {out / 'judge.train.jsonl'} --dry-run",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@app.command("collect-labels")
+def collect_labels_cmd(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    pool: int = typer.Option(120, "--pool", help="How many papers to judge for labels."),
+) -> None:
+    """Run the relevance gate over a large pool purely to generate training labels.
+
+    No digest is produced - it fetches a big batch, ranks by embedding (no floor,
+    so the full relevant/irrelevant spectrum is kept), and makes one gate LLM call
+    per paper, appending every verdict to the label store. A fast way to bootstrap
+    the re-ranker by distilling the gate, instead of waiting for daily runs.
+    """
+    cfg = load_config(config)
+    if not cfg.topics:
+        typer.secho("Need topics in config to judge relevance.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        backend = get_backend(cfg.backend)
+    except BackendError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Fetching up to {pool} papers from arXiv {cfg.arxiv.categories}...")
+    try:
+        papers = fetch_arxiv(cfg.arxiv.categories, pool)
+    except httpx.HTTPError as exc:
+        typer.secho(f"arXiv fetch failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        ranked = rank_papers(papers, cfg.topics, backend.embed, pool, 0.0, None)
+    except BackendError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    if not ranked:
+        typer.secho("No papers to judge.", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(code=1)
+
+    judge_generate = backend.generate
+    judge_name = cfg.backend.model
+    if cfg.judge_model and cfg.judge_model != cfg.backend.model:
+        try:
+            judge_generate = get_backend(replace(cfg.backend, model=cfg.judge_model)).generate
+        except BackendError as exc:
+            typer.secho(f"Error building judge backend: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        judge_name = cfg.judge_model
+    typer.echo(f"Judging {len(ranked)} papers with the gate ({judge_name}) - one LLM call each...")
+
+    gate_log: list[tuple[object, bool, str]] = []
+
+    def _show(p, keep: bool, reason: str) -> None:
+        typer.echo(f"  [{'keep' if keep else 'drop'}] [{p.score:.2f}] {p.title[:55]}")
+        gate_log.append((p, keep, reason))
+
+    filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show)
+    _log_gate_events(cfg, judge_name, gate_log, selected_ids=set())
+    keeps = sum(1 for _, keep, _ in gate_log if keep)
+    typer.secho(
+        f"Collected {len(gate_log)} labels ({keeps} keep / {len(gate_log) - keeps} drop). "
+        "Run `paperboy train-reranker` next.",
+        fg=typer.colors.GREEN,
+    )
+
+
 @app.command("train-reranker")
 def train_reranker_cmd(
     config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
     min_labels: int = typer.Option(20, "--min-labels", help="Refuse to train below this many examples."),
+    test_frac: float = typer.Option(0.25, "--test-frac", help="Fraction held out for the eval."),
+    no_eval: bool = typer.Option(False, "--no-eval", help="Skip the holdout eval vs the cosine baseline."),
 ) -> None:
     """Train the learned re-ranker on accumulated labels (re-embeds stored papers).
 
@@ -390,6 +513,20 @@ def train_reranker_cmd(
     except BackendError as exc:
         typer.secho(f"Error embedding: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
+
+    # Holdout eval: train on a split, compare to the tuned cosine baseline on the
+    # unseen rest, then retrain on everything for the shipped model.
+    if not no_eval and len(examples) >= 8:
+        tr, te = train_test_split(examples, test_frac)
+        ev = train_reranker(tr)
+        thr = best_cosine_threshold(tr)
+        r_acc = accuracy(lambda f: ev.score(f) >= 0.5, te)
+        c_acc = accuracy(lambda f, t=thr: f[0] >= t, te)
+        verdict = "beats" if r_acc > c_acc else ("ties" if r_acc == c_acc else "trails")
+        typer.echo(
+            f"Holdout eval (n_test={len(te)}): re-ranker {r_acc:.0%}  vs  cosine baseline "
+            f"{c_acc:.0%} (thr {thr:.2f})  -> re-ranker {verdict} cosine"
+        )
 
     model = train_reranker(examples)
     correct = sum(1 for feats, lbl in examples if (model.score(feats) >= 0.5) == bool(lbl))
