@@ -28,6 +28,7 @@ from .feedback import (
     write_manifest,
 )
 from .filter import filter_relevant
+from .metrics import RunMetrics, append_run, load_runs, summarize_runs
 from .rank import DOC_PREFIX, QUERY_PREFIX, _cosine, rank_papers
 from .reranker import (
     Reranker,
@@ -42,6 +43,7 @@ from .render import DigestItem, render_markdown, render_pdf
 LABELS_FILE = "labels.jsonl"
 MANIFEST_FILE = "last_digest.json"
 RERANKER_FILE = "reranker.json"
+RUNS_FILE = "runs.jsonl"
 
 
 def _log_gate_events(cfg, judge_name: str, gate_log: list, selected_ids: set[str]) -> None:
@@ -171,6 +173,37 @@ def run(
             except (OSError, ValueError, KeyError) as exc:
                 typer.secho(f"  (ignoring unreadable re-ranker: {exc})", fg=typer.colors.YELLOW, err=True)
 
+    m = RunMetrics(
+        summary_model=cfg.backend.model,
+        judge_model=(cfg.judge_model or cfg.backend.model) if use_filter and cfg.topics else "",
+        embed_model=cfg.backend.embed_model,
+    )
+    try:
+        _pipeline(cfg, n, out_format, use_filter, reranker, m)
+    except BaseException:
+        m.finish("failed")
+        _log_run(cfg, m)
+        raise
+    m.finish("ok" if m.selected else "empty")
+    _log_run(cfg, m)
+    s = m.seconds
+    typer.echo(
+        f"  took {s['total']:.0f}s (fetch {s.get('fetch', 0):.0f}s, rank {s.get('rank', 0):.0f}s, "
+        f"gate {s.get('gate', 0):.0f}s, summarize {s.get('summarize', 0):.0f}s)"
+    )
+
+
+def _log_run(cfg, m: RunMetrics) -> None:
+    """Append run metrics to data_dir/runs.jsonl. Best-effort, like label logging."""
+    try:
+        append_run(Path(cfg.data_dir) / RUNS_FILE, m)
+    except OSError as exc:
+        typer.secho(f"  (could not write run metrics: {exc})", fg=typer.colors.YELLOW, err=True)
+
+
+def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMetrics) -> None:
+    """fetch -> rank -> gate -> summarize -> render, recording metrics into `m`."""
+    m.mark("setup")
     try:
         backend = get_backend(cfg.backend)
     except BackendError as exc:
@@ -178,6 +211,7 @@ def run(
         raise typer.Exit(code=1)
 
     # 1. fetch
+    m.mark("fetch")
     if not cfg.arxiv.enabled:
         typer.secho("No sources enabled (arxiv.enabled is false).", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
@@ -191,6 +225,7 @@ def run(
         typer.secho("No papers returned from arXiv.", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
     typer.echo(f"  fetched {len(papers)} papers.")
+    m.fetched = len(papers)
 
     # 2. rank (embeddings). With the LLM gate on, shortlist more candidates than
     # we need, then let the gate trim them back down to the top N.
@@ -200,6 +235,7 @@ def run(
         typer.echo(f"Ranking against {len(cfg.topics)} topics (embeddings)...")
     else:
         typer.secho("  no topics configured - using most recent papers.", fg=typer.colors.YELLOW)
+    m.mark("rank")
     gate_on = use_filter and bool(cfg.topics)
     shortlist_n = min(max(n * 2, 12), cfg.arxiv.max_results) if gate_on else n
     try:
@@ -208,7 +244,10 @@ def run(
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
+    m.shortlisted = len(ranked)
+
     # 2b. LLM relevance gate: keep/drop each shortlisted paper with a reason.
+    m.mark("gate")
     judge_name = cfg.backend.model
     gate_log: list[tuple[object, bool, str]] = []
     if gate_on and ranked:
@@ -225,6 +264,11 @@ def run(
         )
 
     top = ranked[:n]
+    m.gate_kept = sum(1 for _, keep, _ in gate_log if keep)
+    m.gate_dropped = len(gate_log) - m.gate_kept
+    m.selected = len(top)
+    if top and cfg.topics:
+        m.top_score, m.low_score = round(top[0].score, 4), round(top[-1].score, 4)
 
     # 2c. Capture gate verdicts as weak training labels.
     _log_gate_events(cfg, judge_name, gate_log, selected_ids={p.arxiv_id for p in top})
@@ -240,6 +284,7 @@ def run(
         typer.echo(f"  selected top {len(top)}.")
 
     # 3. summarize
+    m.mark("summarize")
     typer.echo("Summarizing...")
     items: list[DigestItem] = []
     for i, paper in enumerate(top, 1):
@@ -255,11 +300,13 @@ def run(
         items.append(DigestItem(paper=paper, summary=summary))
 
     # 4. render
+    m.mark("render")
     if out_format == "markdown":
         path = render_markdown(items, cfg.output.dir)
     else:
         path = render_pdf(items, cfg.output.dir)
     typer.secho(f"Digest written: {path}", fg=typer.colors.GREEN)
+    m.output = str(path)
 
     # Record what made this digest so `paperboy rate` can ask about it later.
     if top:
@@ -270,6 +317,37 @@ def run(
             )
         except OSError:
             pass  # manifest is a convenience; never fail a run over it
+
+
+@app.command()
+def stats(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    last: int = typer.Option(10, "--last", "-n", help="How many recent runs to list."),
+) -> None:
+    """Show recent runs: timings, how many papers survived each step, failures."""
+    cfg = load_config(config)
+    runs = load_runs(Path(cfg.data_dir) / RUNS_FILE)
+    if not runs:
+        typer.secho("No runs logged yet. `paperboy run` records one per digest.", fg=typer.colors.YELLOW)
+        return
+    recent = runs[-last:]
+    typer.echo(f"{'when (UTC)':<17} {'status':<8} {'fetch':>5} {'short':>5} {'kept':>4} {'sel':>3} {'secs':>5}  judge")
+    for r in recent:
+        status = r.get("status", "?")
+        if status == "failed" and r.get("failed_stage"):
+            status = f"x {r['failed_stage']}"[:8]
+        typer.echo(
+            f"{r.get('ts', '')[:16].replace('T', ' '):<17} {status:<8} {r.get('fetched', 0):>5} "
+            f"{r.get('shortlisted', 0):>5} {r.get('gate_kept', 0):>4} {r.get('selected', 0):>3} "
+            f"{(r.get('seconds') or {}).get('total', 0):>5.0f}  {r.get('judge_model', '') or '-'}"
+        )
+    agg = summarize_runs(runs)
+    status = ", ".join(f"{k} {v}" for k, v in sorted(agg["status"].items()))
+    typer.echo(f"\nAll {agg['runs']} runs: {status}. Mean papers per digest: {agg['mean_selected']}.")
+    secs = agg["mean_seconds"]
+    if secs:
+        parts = [f"{k} {secs[k]:.0f}s" for k in ("fetch", "rank", "gate", "summarize", "render", "total") if k in secs]
+        typer.echo("Mean time: " + ", ".join(parts))
 
 
 @app.command()
