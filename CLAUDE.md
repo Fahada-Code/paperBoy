@@ -187,6 +187,14 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       at temperature 0. Full 8-paper digest now ~63s (was ~235s for 3 papers before batching).
       eval-judge uses it too. Observed quality gap (not fixed): qwen2.5:7b summaries still overstate
       tangential topic links (e.g. a KAN paper "enhancing model compression") despite the prompt.
+      NO REPEATS (2026-10-22): history.py keeps data/seen.json {base arxiv id: first delivered
+      date}, 30-day window. `run` drops already-delivered papers after fetch (metric skipped_seen;
+      `--include-seen` to disable) and marks the digest's picks after render. arXiv doesn't move on
+      weekends, so without this the cron repeated Friday. digest.yml now caches data/ between runs
+      (key per run_id, restore by prefix) - UNVERIFIED until the next cron run on GitHub.
+      Also: tests/test_cli.py end-to-end CLI tests (fake backend + fake arXiv) for run/stats/
+      rate -r/eval-judge/doctor; `doctor` now checks summary, embedding and judge models separately.
+      README brought current (gate, feedback/eval commands, hosted marked not implemented).
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
