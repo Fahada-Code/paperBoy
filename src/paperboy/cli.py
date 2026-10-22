@@ -1,8 +1,9 @@
 """paperBoy command-line interface.
 
-Phase 1: `summarize` is live and runs against the configured LLM backend
-(Ollama by default). `run` (the full fetch->rank->summarize->PDF pipeline) is
-still a Phase 2 stub.
+Kept thin: each command parses options, then calls into the importable modules
+(sources, rank, filter, render, feedback, metrics, history, training). `run` is
+the daily pipeline; the rest are health checks, feedback/labels, evaluation,
+and the local GPU serving tools.
 """
 
 from __future__ import annotations

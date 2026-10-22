@@ -1,7 +1,7 @@
 """Relevance ranking.
 
-Embed the user's topics and each paper, then score papers by cosine similarity
-to the topic centroid. No numpy — the vectors are small and there are only a few
+Embed the user's topics and each paper, then score each paper by its best
+cosine match across the topics. No numpy — the vectors are small and there are only a few
 dozen papers per run, so plain Python is plenty and keeps dependencies light.
 """
 
