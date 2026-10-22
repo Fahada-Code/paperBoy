@@ -83,3 +83,25 @@ def test_default_mode_keeps_fewshot():
 
     filter_relevant([_paper("a", "x")], topics=["t"], generate=fake_generate)
     assert "Example A" in seen[0]
+
+
+def test_parallel_workers_keep_order_and_verdicts():
+    import threading
+    import time
+
+    seen_threads = set()
+
+    def slow_generate(prompt: str, *, system=None, temperature: float = 0.0) -> str:
+        seen_threads.add(threading.get_ident())
+        last = prompt.rsplit("Title:", 1)[1].split("\n")[0]
+        time.sleep(0.02 if "p0" in last else 0.0)  # first paper finishes last
+        return "VERDICT: KEEP\nREASON: ok" if "keep" in last else "VERDICT: DROP\nREASON: no"
+
+    papers = [_paper(f"p{i}", f"p{i} {'keep' if i % 2 == 0 else 'nah'}") for i in range(6)]
+    order = []
+    kept = filter_relevant(
+        papers, ["t"], slow_generate, workers=3, on_verdict=lambda p, k, r: order.append(p.arxiv_id)
+    )
+    assert order == [p.arxiv_id for p in papers]  # progress in input order
+    assert [p.arxiv_id for p in kept] == ["p0", "p2", "p4"]
+    assert len(seen_threads) > 1

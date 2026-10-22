@@ -10,6 +10,7 @@ relevance, not advice or prediction, so it stays within the project's guardrail.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from .backends import BackendError
@@ -105,6 +106,7 @@ def filter_relevant(
     *,
     on_verdict: Callable[[Paper, bool, str], None] | None = None,
     tuned: bool = False,
+    workers: int = 1,
 ) -> list[Paper]:
     """Return the subset of `papers` the LLM judges genuinely relevant to `topics`.
 
@@ -116,28 +118,40 @@ def filter_relevant(
     `tuned=True` is for a fine-tuned judge: it sends the exact short prompt the
     model was trained on (training/dataset.py) with no few-shot and no system
     prompt, so inference matches training and each call costs fewer tokens.
+
+    `workers > 1` sends that many judge requests at once. Ollama batches parallel
+    requests on the GPU: 4 workers judged 12 papers in 22s vs 49s one at a time,
+    with identical verdicts (temperature 0). Results still come back in order.
     """
     if not topics:
         return papers
 
     topic_list = "; ".join(topics)
-    kept: list[Paper] = []
-    for p in papers:
+
+    def _judge_one(p: Paper) -> tuple[bool, str]:
         if tuned:
             prompt, system = build_prompt(topics, p.title, p.abstract), None
         else:
             prompt, system = _fewshot_prompt(topic_list, p), JUDGE_SYSTEM
         try:
-            reply = generate(prompt, system=system, temperature=0.0)
-            keep, reason = _verdict(reply)
+            return _verdict(generate(prompt, system=system, temperature=0.0))
         except BackendError:
-            keep, reason = True, "kept (judge unavailable)"
+            return True, "kept (judge unavailable)"
 
-        if on_verdict is not None:
-            on_verdict(p, keep, reason)
-        if keep:
-            p.relevance_reason = reason
-            kept.append(p)
+    # Both map()s are lazy and ordered, so progress still streams paper by paper.
+    pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 and len(papers) > 1 else None
+    verdicts = pool.map(_judge_one, papers) if pool else map(_judge_one, papers)
+    kept: list[Paper] = []
+    try:
+        for p, (keep, reason) in zip(papers, verdicts):
+            if on_verdict is not None:
+                on_verdict(p, keep, reason)
+            if keep:
+                p.relevance_reason = reason
+                kept.append(p)
+    finally:
+        if pool:
+            pool.shutdown(cancel_futures=True)
     return kept
 
 

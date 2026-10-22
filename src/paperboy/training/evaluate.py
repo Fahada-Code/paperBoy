@@ -12,6 +12,7 @@ the same model on them measures self-agreement, not correctness. Gold (human
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from ..filter import filter_relevant
@@ -48,12 +49,13 @@ def evaluate_judge(
     generate: Callable[..., str],
     *,
     tuned: bool = False,
+    workers: int = 1,
     on_result: Callable[[dict[str, Any], int], None] | None = None,
 ) -> dict[str, Any]:
     """Run the gate on each example and score it. Returns overall metrics plus
     a per-source breakdown ("gate" weak vs "rating" gold) under "by_source"."""
-    results: list[tuple[dict[str, Any], int]] = []
-    for ex in examples:
+
+    def _predict(ex: dict[str, Any]) -> int:
         paper = Paper(
             arxiv_id=ex["arxiv_id"],
             title=ex.get("title", ""),
@@ -69,10 +71,15 @@ def evaluate_judge(
             on_verdict=lambda _p, keep, _r: verdicts.append(keep),
             tuned=tuned,
         )
-        pred = 1 if (verdicts and verdicts[0]) else 0
-        results.append((ex, pred))
-        if on_result is not None:
-            on_result(ex, pred)
+        return 1 if (verdicts and verdicts[0]) else 0
+
+    # Examples can carry different topic lists, so parallelize per example.
+    results: list[tuple[dict[str, Any], int]] = []
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for ex, pred in zip(examples, pool.map(_predict, examples)):
+            results.append((ex, pred))
+            if on_result is not None:
+                on_result(ex, pred)
 
     out = confusion([(ex["label"], pred) for ex, pred in results])
     out["by_source"] = {
