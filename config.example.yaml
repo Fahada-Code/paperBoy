@@ -45,6 +45,11 @@ judge_model: ""
 # then gets the short prompt it was trained on, without the few-shot examples.
 judge_tuned: false
 
+# Parallel LLM requests for the gate and the summaries. Ollama batches them on
+# the GPU: 4 judged 12 papers in 22s vs 49s one at a time, with the same
+# verdicts. Set 1 to go one at a time.
+llm_workers: 4
+
 # Use the learned re-ranker (data_dir/reranker.json) for scoring when it has been
 # trained; otherwise fall back to raw embedding cosine. Train it with
 # `paperboy train-reranker` once labels accumulate. Override per run: --no-reranker.

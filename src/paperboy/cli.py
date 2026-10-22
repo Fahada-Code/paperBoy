@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -262,7 +263,7 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
             gate_log.append((p, keep, reason))
 
         ranked = filter_relevant(
-            ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned
+            ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned, workers=cfg.llm_workers
         )
 
     top = ranked[:n]
@@ -289,17 +290,23 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
     m.mark("summarize")
     typer.echo("Summarizing...")
     items: list[DigestItem] = []
-    for i, paper in enumerate(top, 1):
-        # Show the relevance score so you can calibrate min_score from real runs.
-        tag = f"[{paper.score:.2f}] " if cfg.topics else ""
-        typer.echo(f"  [{i}/{len(top)}] {tag}{paper.title[:66]}")
+
+    def _summarize(paper) -> str:
         source = f"Title: {paper.title}\n\nAbstract: {paper.abstract}"
+        return backend.summarize(source, max_words=70, topic=paper.matched_topic)
+
+    # Parallel like the gate (Ollama batches on the GPU); map keeps digest order.
+    with ThreadPoolExecutor(max_workers=cfg.llm_workers) as pool:
         try:
-            summary = backend.summarize(source, max_words=70, topic=paper.matched_topic)
+            for i, (paper, summary) in enumerate(zip(top, pool.map(_summarize, top)), 1):
+                # Show the relevance score so you can calibrate min_score from real runs.
+                tag = f"[{paper.score:.2f}] " if cfg.topics else ""
+                typer.echo(f"  [{i}/{len(top)}] {tag}{paper.title[:66]}")
+                items.append(DigestItem(paper=paper, summary=summary))
         except BackendError as exc:
+            pool.shutdown(cancel_futures=True)
             typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
-        items.append(DigestItem(paper=paper, summary=summary))
 
     # 4. render
     m.mark("render")
@@ -548,7 +555,7 @@ def eval_judge_cmd(
         got = "keep" if pred else "drop"
         typer.echo(f"  {ok} [{got}] ({ex['source']}) {ex['title'][:60]}")
 
-    m = evaluate_judge(examples, judge_generate, tuned=use_tuned, on_result=_show)
+    m = evaluate_judge(examples, judge_generate, tuned=use_tuned, workers=cfg.llm_workers, on_result=_show)
 
     def _line(name: str, r: dict) -> str:
         return (
@@ -615,7 +622,9 @@ def collect_labels_cmd(
         typer.echo(f"  [{'keep' if keep else 'drop'}] [{p.score:.2f}] {p.title[:55]}")
         gate_log.append((p, keep, reason))
 
-    filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned)
+    filter_relevant(
+        ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned, workers=cfg.llm_workers
+    )
     _log_gate_events(cfg, judge_name, gate_log, selected_ids=set())
     keeps = sum(1 for _, keep, _ in gate_log if keep)
     typer.secho(

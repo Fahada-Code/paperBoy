@@ -14,6 +14,13 @@ def test_missing_file_uses_defaults(tmp_path):
     assert cfg.llm_filter is True
     assert cfg.judge_model == ""  # empty = judge uses the summary model
     assert cfg.judge_tuned is False
+    assert cfg.llm_workers == 4
+
+
+def test_llm_workers_floor_is_one(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text("llm_workers: 0\n", encoding="utf-8")
+    assert load_config(p).llm_workers == 1
 
 
 def test_judge_model_loads(tmp_path):

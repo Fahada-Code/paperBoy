@@ -58,6 +58,9 @@ class Config:
     # then sends the short no-few-shot prompt it was trained on instead of the
     # few-shot prompt the stock models need.
     judge_tuned: bool = False
+    # How many LLM requests (gate verdicts, summaries) to send at once. Ollama
+    # batches them on the GPU (~2x faster at 2-4, same verdicts). 1 = one at a time.
+    llm_workers: int = 4
     # Use the trained learned re-ranker (data_dir/reranker.json) for scoring when
     # it exists. Falls back to raw embedding cosine when off or untrained. Train it
     # with `paperboy train-reranker` once enough labels have accumulated.
@@ -113,6 +116,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         llm_filter=bool(data.get("llm_filter", True)),
         judge_model=str(data.get("judge_model", "") or ""),
         judge_tuned=bool(data.get("judge_tuned", False)),
+        llm_workers=max(1, int(data.get("llm_workers", 4))),
         use_reranker=bool(data.get("use_reranker", True)),
         data_dir=str(data.get("data_dir", "./data") or "./data"),
         backend=backend,
