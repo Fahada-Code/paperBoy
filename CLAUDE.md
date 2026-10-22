@@ -167,6 +167,12 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       prints acc/prec/rec/f1 vs majority-class, split weak vs gold. Baseline (n=38 val, 391 events,
       only 2 gold): qwen2.5:7b 92% acc (prec 100%, rec 83%) - inflated, weak labels are mostly its
       own verdicts; llama3.2:3b 74% (rec 56%, drops real papers). Gold labels are the bottleneck.
+      GOLD LABEL QUEUE (2026-10-22): `paperboy rate -r N` (feedback.review_queue) spends scarce
+      human ratings on the margin: unrated papers ordered by (1) gate runs that disagreed, (2) gate
+      vs embedding-score conflicts around the best keep/drop score cut (~0.61 on current data),
+      (3) nearest that cut. Shown blind (abstract + url), judge verdict revealed after answering;
+      prints judge-vs-you agreement. Next: Fahad rates ~20-30 via `rate -r 30`, then re-run
+      `eval-judge --gold-only` for an honest judge baseline.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted

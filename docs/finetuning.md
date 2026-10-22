@@ -17,6 +17,7 @@ sitting, and add your gold judgments:
 ```powershell
 .\.venv\Scripts\paperboy.exe collect-labels --pool 150   # weak labels from the gate
 .\.venv\Scripts\paperboy.exe rate                        # gold labels (interactive)
+.\.venv\Scripts\paperboy.exe rate -r 20                  # gold labels on the 20 most borderline papers
 .\.venv\Scripts\paperboy.exe labels                      # how many you have
 ```
 
