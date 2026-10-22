@@ -86,7 +86,12 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       CLI cmds, `local` backend. bitsandbytes 4-bit works on Windows NATIVE (no WSL2 needed) with
       torch 2.6.0+cu124. Representative bench (Qwen2.5-1.5B 4-bit, RTX 4050, 24 req @ conc 12, 128 tok):
       batch=1 → 7.4 tok/s / p99 96.7s; batch=8 → 75.9 tok/s / p99 6.7s = ~10x throughput, +50MB VRAM.
-      Note: batch=1 slowness is partly bnb per-op overhead at bs=1. Optional follow-up: fp16 comparison.
+      Note: batch=1 slowness is partly bnb per-op overhead at bs=1.
+      FP16 COMPARISON (2026-10-22, 2 runs each, same settings, GPU cleared of Ollama first):
+      fp16 bs1 24-26 / bs8 146-185 tok/s, ~3.0GB; 4-bit bs1 14-21 / bs8 108-141 tok/s, ~1.1GB.
+      Stable: batching 6-8x in both, 4-bit ~2.7x less VRAM. NOT stable: fp16-vs-4bit speed (about
+      even to 1.7x) - laptop clocks/thermals vary run to run (even the original 7.4/75.9 run is
+      lower). README publishes ranges + only the stable claims.
 - [~] **Phase 4** — autonomy (IN PROGRESS). CI done (.github/workflows/ci.yml: pytest 3.11-3.13).
       Scheduled digest done (.github/workflows/digest.yml): cron 13:00 UTC, installs Ollama on the
       runner (CPU), pulls llama3.2:3b + nomic-embed-text, runs `paperboy run`, uploads PDF as an
