@@ -100,7 +100,11 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       (multiple successful cron runs Oct 11-15). HARDENING (2026-10-15): fetch_arxiv now retries
       transient failures (timeouts, conn errors, 5xx) with exponential backoff - a single arXiv
       read-timeout had killed the Oct 14 run. Ollama model blobs now cached in the workflow
-      (actions/cache on ~/.ollama/models). Structured run metrics DONE (2026-10-22, see Phase 6 notes: metrics.py, `paperboy stats`).
+      (actions/cache on ~/.ollama/models). CI JUDGE (2026-10-22): cron digest now runs qwen2.5:7b as
+      judge_model (llama3.2:3b still summarizes) via a sed-generated config.ci.yaml with
+      llm_workers 1 (CPU doesn't batch); timeout 30 -> 60 min; artifact also uploads
+      data/runs.jsonl for stage timings. UNVERIFIED: CPU runtime of the 7B judge unknown until
+      the first run after push - check runs.jsonl 'gate' seconds; fall back to 3B if too slow. Structured run metrics DONE (2026-10-22, see Phase 6 notes: metrics.py, `paperboy stats`).
 - [~] **Phase 6** — training data foundation (feedback loop). DECISION (2026-10-20): before any
       fine-tune/re-ranker, capture labels - training's real bottleneck is data, not compute. New
       module feedback.py + `data_dir` config (default ./data, gitignored). `run` now logs every
