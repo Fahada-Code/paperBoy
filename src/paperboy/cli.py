@@ -73,6 +73,19 @@ def _log_gate_events(cfg, judge_name: str, gate_log: list, selected_ids: set[str
         typer.secho(f"  (could not write labels: {exc})", fg=typer.colors.YELLOW, err=True)
 from .sources import fetch_arxiv
 
+
+def _judge(cfg, backend) -> tuple:
+    """(generate fn, model name) for the relevance gate. The judge can run a
+    different (e.g. larger or fine-tuned) local model than the summarizer."""
+    if not cfg.judge_model or cfg.judge_model == cfg.backend.model:
+        return backend.generate, cfg.backend.model
+    try:
+        return get_backend(replace(cfg.backend, model=cfg.judge_model)).generate, cfg.judge_model
+    except BackendError as exc:
+        typer.secho(f"Error building judge backend: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+
 app = typer.Typer(
     help="paperBoy - your terminal AI research digest. Fetch, rank, summarize, deliver.",
     no_args_is_help=True,
@@ -195,18 +208,10 @@ def run(
         raise typer.Exit(code=1)
 
     # 2b. LLM relevance gate: keep/drop each shortlisted paper with a reason.
-    # The judge can run a different (e.g. larger) local model than the summarizer.
     judge_name = cfg.backend.model
     gate_log: list[tuple[object, bool, str]] = []
     if gate_on and ranked:
-        judge_generate = backend.generate
-        if cfg.judge_model and cfg.judge_model != cfg.backend.model:
-            try:
-                judge_generate = get_backend(replace(cfg.backend, model=cfg.judge_model)).generate
-            except BackendError as exc:
-                typer.secho(f"Error building judge backend: {exc}", fg=typer.colors.RED, err=True)
-                raise typer.Exit(code=1)
-            judge_name = cfg.judge_model
+        judge_generate, judge_name = _judge(cfg, backend)
         typer.echo(f"Filtering {len(ranked)} candidates with the LLM relevance gate ({judge_name})...")
 
         def _show(p, keep: bool, reason: str) -> None:
@@ -214,7 +219,9 @@ def run(
             typer.echo(f"  [{mark}] [{p.score:.2f}] {p.title[:55]} - {reason[:45]}")
             gate_log.append((p, keep, reason))
 
-        ranked = filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show)
+        ranked = filter_relevant(
+            ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned
+        )
 
     top = ranked[:n]
 
@@ -410,15 +417,7 @@ def collect_labels_cmd(
         typer.secho("No papers to judge.", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-    judge_generate = backend.generate
-    judge_name = cfg.backend.model
-    if cfg.judge_model and cfg.judge_model != cfg.backend.model:
-        try:
-            judge_generate = get_backend(replace(cfg.backend, model=cfg.judge_model)).generate
-        except BackendError as exc:
-            typer.secho(f"Error building judge backend: {exc}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(code=1)
-        judge_name = cfg.judge_model
+    judge_generate, judge_name = _judge(cfg, backend)
     typer.echo(f"Judging {len(ranked)} papers with the gate ({judge_name}) - one LLM call each...")
 
     gate_log: list[tuple[object, bool, str]] = []
@@ -427,7 +426,7 @@ def collect_labels_cmd(
         typer.echo(f"  [{'keep' if keep else 'drop'}] [{p.score:.2f}] {p.title[:55]}")
         gate_log.append((p, keep, reason))
 
-    filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show)
+    filter_relevant(ranked, cfg.topics, judge_generate, on_verdict=_show, tuned=cfg.judge_tuned)
     _log_gate_events(cfg, judge_name, gate_log, selected_ids=set())
     keeps = sum(1 for _, keep, _ in gate_log if keep)
     typer.secho(
