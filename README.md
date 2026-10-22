@@ -11,16 +11,20 @@ with an LLM, and hands you a clean **PDF brief** — no feeds to scroll, no fron
 paperBoy is a small Python/Typer CLI that runs one pipeline:
 
 ```
-fetch (arXiv)  ->  rank (embeddings)  ->  summarize (LLM)  ->  PDF / Markdown brief
+fetch (arXiv) -> rank (embeddings) -> LLM relevance gate -> summarize (LLM) -> PDF / Markdown brief
 ```
 
-1. **Fetch** — pulls recent papers from the arXiv Atom API for the categories you choose
-   (HN / GitHub trending are planned).
-2. **Rank** — embeds each paper and scores it by cosine similarity to the centroid of your
-   configured topics, then dedups.
-3. **Summarize** — sends the top N abstracts to a pluggable LLM backend for short,
-   plain-language summaries.
-4. **Deliver** — writes a dated PDF (or Markdown) digest to a local folder.
+1. **Fetch** - pulls recent papers from the arXiv Atom API for the categories you choose
+   (HN / GitHub trending are planned), skipping papers an earlier digest already delivered.
+2. **Rank** - embeds each paper and scores it by its best cosine match across your topics
+   (not an average, which blurs distinct interests), drops anything under `min_score`, dedups.
+3. **Gate** - an LLM reads each shortlisted abstract and votes keep/drop with a one-line
+   reason. Embeddings alone let through papers that only share ML vocabulary.
+4. **Summarize** - short, plain-language summaries of what survives, each tied to the topic
+   it matched (and told to say so when the link is weak instead of inventing one).
+5. **Deliver** - writes a dated PDF (or Markdown) digest to a local folder.
+
+A quiet day gives a short or empty brief, not filler.
 
 ## Why it exists
 
@@ -91,9 +95,28 @@ More:
 
 ```bash
 paperboy run --top 5 --format markdown   # fewer picks, Markdown instead of PDF
+paperboy run --include-seen              # allow papers an earlier digest already showed
+paperboy stats                           # recent runs: timings, papers kept per step, failures
 paperboy summarize "long text here..."   # summarize ad-hoc text (argument or stdin)
 paperboy version
 ```
+
+### Feedback and evaluation
+
+Every run logs the gate's keep/drop verdicts to `data/labels.jsonl` (gitignored). Your own
+ratings are the ground truth that everything else is measured against:
+
+```bash
+paperboy rate                  # rate the papers in your last digest (good / bad)
+paperboy rate -r 20            # rate the 20 most borderline logged papers (judge verdict hidden)
+paperboy labels                # how many labels you have
+paperboy eval-judge -m qwen2.5:7b --gold-only --split all   # score a judge model against your ratings
+paperboy collect-labels --pool 150                          # bulk-judge papers to grow the label set
+```
+
+The groundwork for fine-tuning the judge on those labels is in
+[`docs/finetuning.md`](docs/finetuning.md). It has not been trained yet; it waits for enough
+real ratings.
 
 Everything is driven by `config.yaml` — topics, arXiv categories, how many picks make the
 digest, which backend, and the output format. See [`config.example.yaml`](config.example.yaml).
@@ -107,7 +130,7 @@ Low adoption friction is a feature. paperBoy talks to any of three backends; pic
 |----------|----------|--------------|------------|
 | Ollama   | `ollama` | No (CPU OK)  | The default. Easiest install, runs anywhere. |
 | Local GPU| `local`  | Yes          | paperBoy's own 4-bit quantized, dynamically-batched engine — the performance path. |
-| Hosted   | `hosted` | No           | A cloud API, when you'd rather not run a model yourself. |
+| Hosted   | `hosted` | No           | Not implemented. Everything runs on your own hardware by design. |
 
 ### Local GPU serving
 
@@ -143,7 +166,8 @@ responsibilities:
   Ollama; on your own machine it can use the local GPU engine.
 - **Orchestration / scheduling runs on the free tier.** A GitHub Actions cron workflow
   (`.github/workflows/digest.yml`) installs Ollama on the runner, pulls the models, runs
-  `paperboy run`, and uploads the resulting PDF as a build artifact.
+  `paperboy run`, and uploads the resulting PDF as a build artifact. `data/` is cached
+  between runs so the cron digest doesn't repeat papers.
 
 The result: a daily digest with no always-on server, no API key, and no laptop that has to
 stay awake. (Don't try to "deploy the model to a free-tier VM" — it won't fit.)
@@ -151,11 +175,12 @@ stay awake. (Don't try to "deploy the model to a free-tier VM" — it won't fit.
 ## Roadmap
 
 - [x] **Phase 0** — repo, Typer CLI skeleton, config
-- [x] **Phase 1** — pluggable LLM backend (Ollama now; local GPU / hosted), `summarize`, `doctor`
+- [x] **Phase 1** — pluggable LLM backend (Ollama, local GPU), `summarize`, `doctor`
 - [x] **Phase 2** — fetch (arXiv) -> embed-rank -> summarize -> PDF/Markdown (`run`)
 - [x] **Phase 3** — local GPU serving: 4-bit quantization + dynamic batching + benchmark (`serve`, `bench`)
-- [~] **Phase 4** — autonomy: CI (pytest 3.11-3.13) + scheduled digest via GitHub Actions cron
-- [ ] **Phase 5** — PyPI release, demo cast, docs, polish
+- [~] **Phase 4** - autonomy: CI (pytest 3.11-3.13), scheduled digest via GitHub Actions cron, run metrics (`stats`)
+- [~] **Phase 6** - feedback loop: label logging, `rate`, judge eval, fine-tune groundwork (training gated on real ratings)
+- [ ] **Phase 5** - PyPI release, demo cast, docs, polish
 
 ## License
 
