@@ -380,6 +380,76 @@ def export_train_cmd(
         )
 
 
+@app.command("eval-judge")
+def eval_judge_cmd(
+    config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
+    model: str = typer.Option("", "--model", "-m", help="Judge model to test (default: the configured judge)."),
+    tuned: bool | None = typer.Option(None, "--tuned/--no-tuned", help="Override judge_tuned (prompt style)."),
+    split: str = typer.Option("val", "--split", help="val (same held-out split as export-train) or all."),
+    val_frac: float = typer.Option(0.15, "--val-frac", help="Must match the export-train value."),
+    gold_only: bool = typer.Option(False, "--gold-only", help="Only score human `rate` labels."),
+) -> None:
+    """Score a judge model against held-out labels (accuracy, precision, recall).
+
+    Use it to compare stock models, and to check a fine-tuned judge actually beats
+    the stock one before switching to it. Weak labels came from the gate itself,
+    so gold labels are the honest test.
+    """
+    from .training.dataset import build_judge_examples, split_examples
+    from .training.evaluate import evaluate_judge
+
+    cfg = load_config(config)
+    if model:
+        cfg = replace(cfg, judge_model=model)
+    use_tuned = cfg.judge_tuned if tuned is None else tuned
+
+    examples = build_judge_examples(load_events(Path(cfg.data_dir) / LABELS_FILE))
+    if split == "val":
+        _, examples = split_examples(examples, val_frac)
+    elif split != "all":
+        typer.secho("--split must be 'val' or 'all'.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    if gold_only:
+        examples = [e for e in examples if e["source"] == "rating"]
+    if not examples:
+        typer.secho("No labeled examples to score. Collect labels first.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        backend = get_backend(cfg.backend)
+    except BackendError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    judge_generate, judge_name = _judge(cfg, backend)
+    style = "tuned prompt" if use_tuned else "few-shot prompt"
+    typer.echo(f"Scoring {judge_name} ({style}) on {len(examples)} {split} examples...")
+
+    def _show(ex, pred: int) -> None:
+        ok = "ok  " if pred == ex["label"] else "MISS"
+        got = "keep" if pred else "drop"
+        typer.echo(f"  {ok} [{got}] ({ex['source']}) {ex['title'][:60]}")
+
+    m = evaluate_judge(examples, judge_generate, tuned=use_tuned, on_result=_show)
+
+    def _line(name: str, r: dict) -> str:
+        return (
+            f"  {name:<6} n={r['n']:<4} acc {r['accuracy']:.0%}  prec {r['precision']:.0%}  "
+            f"rec {r['recall']:.0%}  f1 {r['f1']:.2f}  (majority-class {r['majority']:.0%})"
+        )
+
+    typer.secho(f"\n{judge_name}:", bold=True)
+    typer.echo(_line("all", m))
+    for src, r in m["by_source"].items():
+        typer.echo(_line("gold" if src == "rating" else "weak", r))
+    typer.echo(f"  confusion: keep->keep {m['tp']}  drop->keep {m['fp']}  keep->drop {m['fn']}  drop->drop {m['tn']}")
+    if "rating" not in m["by_source"]:
+        typer.secho(
+            "  note: no gold labels in this set, so this is agreement with the gate's own past "
+            "verdicts, not true accuracy. Add gold labels with `paperboy rate`.",
+            fg=typer.colors.YELLOW,
+        )
+
+
 @app.command("collect-labels")
 def collect_labels_cmd(
     config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
