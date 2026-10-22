@@ -10,7 +10,7 @@ on:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60  # the 7B judge on CPU is the slow part; see runs.jsonl in the artifact
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ollama/models
-          key: ollama-models-llama3.2-3b-nomic-embed-text-v1
+          key: ollama-models-llama3.2-3b-qwen2.5-7b-nomic-embed-text-v2
 
       # Carry data/ (seen.json, run metrics, labels) between cron runs so the
       # digest doesn't repeat papers. Caches are immutable, so save under a fresh
@@ -54,12 +54,23 @@ jobs:
             sleep 1
           done
           ollama pull llama3.2:3b
+          ollama pull qwen2.5:7b
           ollama pull nomic-embed-text
-          paperboy run --config config.example.yaml --top 6
+          # Small model writes the summaries; the 7B is the relevance judge. In
+          # eval-judge the 3B judge missed ~half the relevant papers the 7B kept
+          # (74% vs 92% agreement on logged labels). CPU cores don't batch like a
+          # GPU, so no parallel calls here.
+          sed -e 's/^judge_model: ""/judge_model: "qwen2.5:7b"/' \
+              -e 's/^llm_workers: 4/llm_workers: 1/' \
+              config.example.yaml > config.ci.yaml
+          grep -q '^judge_model: "qwen2.5:7b"' config.ci.yaml  # fail loudly if the sed missed
+          paperboy run --config config.ci.yaml --top 6
 
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
           name: daily-digest
-          path: digests/
+          path: |
+            digests/
+            data/runs.jsonl
           if-no-files-found: error
