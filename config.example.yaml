@@ -41,6 +41,10 @@ llm_filter: true
 # cost on every summary, e.g.  judge_model: "qwen2.5:14b"
 judge_model: ""
 
+# Set true only if judge_model is your fine-tuned judge (docs/finetuning.md). It
+# then gets the short prompt it was trained on, without the few-shot examples.
+judge_tuned: false
+
 # Use the learned re-ranker (data_dir/reranker.json) for scoring when it has been
 # trained; otherwise fall back to raw embedding cosine. Train it with
 # `paperboy train-reranker` once labels accumulate. Override per run: --no-reranker.

@@ -14,6 +14,7 @@ from typing import Callable
 
 from .backends import BackendError
 from .sources import Paper
+from .training.dataset import build_prompt
 
 GenerateFn = Callable[..., str]
 
@@ -103,6 +104,7 @@ def filter_relevant(
     generate: GenerateFn,
     *,
     on_verdict: Callable[[Paper, bool, str], None] | None = None,
+    tuned: bool = False,
 ) -> list[Paper]:
     """Return the subset of `papers` the LLM judges genuinely relevant to `topics`.
 
@@ -110,6 +112,10 @@ def filter_relevant(
     score). Each kept paper gets its `.relevance_reason` set. If the backend
     errors on a paper we keep it (fail open - a borderline include beats a crash).
     `on_verdict` is called for every paper with (paper, kept, reason) for progress.
+
+    `tuned=True` is for a fine-tuned judge: it sends the exact short prompt the
+    model was trained on (training/dataset.py) with no few-shot and no system
+    prompt, so inference matches training and each call costs fewer tokens.
     """
     if not topics:
         return papers
@@ -117,18 +123,12 @@ def filter_relevant(
     topic_list = "; ".join(topics)
     kept: list[Paper] = []
     for p in papers:
-        prompt = (
-            f"{_FEWSHOT}\n"
-            "Now judge this paper the same way.\n"
-            f"Reader's topics: {topic_list}.\n"
-            f"Title: {p.title}\nAbstract: {p.abstract}\n\n"
-            "Reply in exactly three lines:\n"
-            "THOUGHT: (one sentence naming the paper's actual subject vs the topics)\n"
-            "VERDICT: KEEP or DROP\n"
-            "REASON: (15 words max)"
-        )
+        if tuned:
+            prompt, system = build_prompt(topics, p.title, p.abstract), None
+        else:
+            prompt, system = _fewshot_prompt(topic_list, p), JUDGE_SYSTEM
         try:
-            reply = generate(prompt, system=JUDGE_SYSTEM, temperature=0.0)
+            reply = generate(prompt, system=system, temperature=0.0)
             keep, reason = _verdict(reply)
         except BackendError:
             keep, reason = True, "kept (judge unavailable)"
@@ -139,3 +139,16 @@ def filter_relevant(
             p.relevance_reason = reason
             kept.append(p)
     return kept
+
+
+def _fewshot_prompt(topic_list: str, p: Paper) -> str:
+    return (
+        f"{_FEWSHOT}\n"
+        "Now judge this paper the same way.\n"
+        f"Reader's topics: {topic_list}.\n"
+        f"Title: {p.title}\nAbstract: {p.abstract}\n\n"
+        "Reply in exactly three lines:\n"
+        "THOUGHT: (one sentence naming the paper's actual subject vs the topics)\n"
+        "VERDICT: KEEP or DROP\n"
+        "REASON: (15 words max)"
+    )

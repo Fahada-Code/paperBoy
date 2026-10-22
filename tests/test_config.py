@@ -13,13 +13,15 @@ def test_missing_file_uses_defaults(tmp_path):
     assert cfg.arxiv.enabled is True
     assert cfg.llm_filter is True
     assert cfg.judge_model == ""  # empty = judge uses the summary model
+    assert cfg.judge_tuned is False
 
 
 def test_judge_model_loads(tmp_path):
     p = tmp_path / "config.yaml"
-    p.write_text("judge_model: qwen2.5:14b\nllm_filter: false\n", encoding="utf-8")
+    p.write_text("judge_model: qwen2.5:14b\nllm_filter: false\njudge_tuned: true\n", encoding="utf-8")
     cfg = load_config(p)
     assert cfg.judge_model == "qwen2.5:14b"
+    assert cfg.judge_tuned is True
     assert cfg.llm_filter is False
 
 

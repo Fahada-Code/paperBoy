@@ -56,3 +56,30 @@ def test_filter_noop_without_topics():
 
     papers = [_paper("a", "a"), _paper("b", "b")]
     assert filter_relevant(papers, topics=[], generate=boom) == papers
+
+
+def test_tuned_mode_sends_training_prompt_without_fewshot():
+    from paperboy.training.dataset import build_prompt
+
+    seen = []
+
+    def fake_generate(prompt: str, *, system=None, temperature: float = 0.0) -> str:
+        seen.append((prompt, system))
+        return "VERDICT: KEEP\nREASON: on topic"
+
+    p = _paper("a", "GPU inference serving")
+    filter_relevant([p], topics=["gpu serving"], generate=fake_generate, tuned=True)
+    prompt, system = seen[0]
+    assert prompt == build_prompt(["gpu serving"], p.title, p.abstract)  # matches training
+    assert "Example A" not in prompt and system is None
+
+
+def test_default_mode_keeps_fewshot():
+    seen = []
+
+    def fake_generate(prompt: str, *, system=None, temperature: float = 0.0) -> str:
+        seen.append(prompt)
+        return "VERDICT: KEEP\nREASON: on topic"
+
+    filter_relevant([_paper("a", "x")], topics=["t"], generate=fake_generate)
+    assert "Example A" in seen[0]

@@ -86,13 +86,12 @@ Point the gate at the fine-tuned model (summaries stay on your main model):
 ```yaml
 # config.yaml
 judge_model: "paperboy-judge"
+judge_tuned: true
 ```
 
-> **Deploy note.** The fine-tune is trained on a *no-few-shot* prompt (see
-> `training/dataset.py`), since the model has internalized the task. `filter.py`
-> currently always sends its few-shot prompt; to get the token savings, add a
-> branch that drops the few-shot when a fine-tuned `judge_model` is set. Until
-> then the tuned judge still works (it just also sees the few-shot).
+`judge_tuned: true` makes the gate send the short no-few-shot prompt the model
+was trained on (`training/dataset.py`), so inference matches training and each
+call is cheaper. Leave it `false` for stock models, which need the few-shot.
 
 ## 6. Prove it helps
 
