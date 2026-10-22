@@ -35,6 +35,16 @@ jobs:
           path: ~/.ollama/models
           key: ollama-models-llama3.2-3b-nomic-embed-text-v1
 
+      # Carry data/ (seen.json, run metrics, labels) between cron runs so the
+      # digest doesn't repeat papers. Caches are immutable, so save under a fresh
+      # key each run and restore the newest one by prefix.
+      - name: Restore paperBoy history
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: paperboy-data-${{ github.run_id }}
+          restore-keys: paperboy-data-
+
       - name: Serve, pull models, and generate the digest
         run: |
           # Start the Ollama server and keep it alive for this whole step.
