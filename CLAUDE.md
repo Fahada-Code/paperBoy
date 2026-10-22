@@ -181,6 +181,12 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       override using batched /api/embed (32/request, identical vectors - cosine 1.0 vs legacy,
       404 -> falls back to per-item). rank_papers takes embed_many. Rank 158s -> 8s, run 235s -> 74s.
       The gate (~4s/paper, 12 papers) is now the largest stage.
+      PARALLEL LLM CALLS (2026-10-22): config `llm_workers` (default 4) sends gate verdicts and
+      summaries concurrently (ThreadPoolExecutor, ordered map so progress + digest order are
+      unchanged). Ollama batches them on the GPU: gate on 12 papers 49s -> 22s, identical verdicts
+      at temperature 0. Full 8-paper digest now ~63s (was ~235s for 3 papers before batching).
+      eval-judge uses it too. Observed quality gap (not fixed): qwen2.5:7b summaries still overstate
+      tangential topic links (e.g. a KAN paper "enhancing model compression") despite the prompt.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
