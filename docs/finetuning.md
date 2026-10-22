@@ -96,6 +96,15 @@ call is cheaper. Leave it `false` for stock models, which need the few-shot.
 ## 6. Prove it helps
 
 Before trusting the tuned judge, compare it to the stock model on held-out labels
-(the same honesty bar the learned re-ranker was held to - which it failed). Re-run
-`export-train`, keep the val split aside, and compare verdict accuracy. Ship only
-if it clearly wins.
+(the same honesty bar the learned re-ranker was held to - which it failed).
+`eval-judge` scores any judge on the same val split `export-train` held out:
+
+```powershell
+.\.venv\Scripts\paperboy.exe eval-judge -m qwen2.5:7b                  # stock judge, few-shot prompt
+.\.venv\Scripts\paperboy.exe eval-judge -m paperboy-judge --tuned      # your fine-tune, short prompt
+.\.venv\Scripts\paperboy.exe eval-judge -m paperboy-judge --gold-only  # human labels only
+```
+
+Weak labels came from the stock gate, so the stock judge scores high on them by
+construction (it is agreeing with itself). Gold `rate` labels are the real test.
+Ship only if the tuned judge clearly wins on gold.

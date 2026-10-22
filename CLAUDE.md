@@ -160,6 +160,13 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       no-few-shot prompt, add a branch that drops few-shot when judge_model is a tuned model.
       NEXT: accumulate 200+ labels incl 20+ gold via daily use + collect-labels + rate, then run the
       QLoRA train and compare tuned-vs-stock judge on the val split; ship only if it clearly wins.
+      DEPLOY GAP CLOSED + JUDGE EVAL (2026-10-22): config `judge_tuned` (default false) makes
+      filter.py send the exact no-few-shot training prompt (dataset.build_prompt, no system) for a
+      fine-tuned judge. `paperboy eval-judge [-m model] [--tuned] [--split val|all] [--gold-only]`
+      (training/evaluate.py) runs the real gate over the same val split export-train holds out and
+      prints acc/prec/rec/f1 vs majority-class, split weak vs gold. Baseline (n=38 val, 391 events,
+      only 2 gold): qwen2.5:7b 92% acc (prec 100%, rec 83%) - inflated, weak labels are mostly its
+      own verdicts; llama3.2:3b 74% (rec 56%, drops real papers). Gold labels are the bottleneck.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
