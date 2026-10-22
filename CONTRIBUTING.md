@@ -76,7 +76,7 @@ LLM backends are pluggable and live in `src/paperboy/backends/`:
 
 - `ollama` - the free, no-GPU default (and the easiest to run).
 - `local` - the local quantized GPU path (the performance showcase).
-- `hosted` - a cloud HTTP API.
+- `hosted` - reserved, not implemented (paperBoy deliberately runs on your own hardware).
 
 A backend implements the `Backend` ABC in `backends/base.py` and is wired into
 the `get_backend` factory. If you add a backend, keep the same interface and add

@@ -62,7 +62,7 @@ use_reranker: true
 data_dir: "./data"
 
 # LLM backend. Phase 1 wires these up; "ollama" is the easy no-GPU default,
-# "local" is the RTX 4050 showcase path, "hosted" is a cloud API.
+# "local" is the RTX 4050 showcase path, "hosted" is reserved and not implemented.
 backend:
   kind: ollama          # one of: ollama | local | hosted
   model: "llama3.2:3b"  # small + fast; upgrade to "qwen2.5:7b" for sharper summaries (needs ~5GB VRAM)
