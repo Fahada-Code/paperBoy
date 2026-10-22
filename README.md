@@ -154,8 +154,21 @@ paperboy bench --batch-sizes 1,8     # measure batching's effect
 
 That is roughly **10x throughput** for about +50 MB VRAM. Reproduce with `paperboy bench`.
 (Part of batch=1's slowness is bitsandbytes' per-op overhead at batch size 1, which batching
-amortizes.) These are the only measured numbers we publish; anything not listed here hasn't
-been benchmarked.
+amortizes.)
+
+**4-bit vs fp16** - same model, GPU, and load, two runs each (`paperboy bench -q none` vs `-q 4bit`):
+
+| config        | batch=1 tok/s | batch=8 tok/s | batch=8 p99 | VRAM    |
+|---------------|--------------:|--------------:|------------:|--------:|
+| fp16          | 24 - 26       | 146 - 185     | 4.0 - 4.9 s | ~3.0 GB |
+| 4-bit NF4     | 14 - 21       | 108 - 141     | 3.4 - 4.5 s | ~1.1 GB |
+
+What holds across every run: batching gives **6-8x** throughput in both modes, and 4-bit
+uses **~2.7x less VRAM**. What does not hold: the speed gap between them (fp16 was anywhere
+from about even to 1.7x faster). Laptop GPU clocks and thermals swing run to run, including
+versus the table above, so treat single numbers as rough. On a 6 GB card the VRAM saving is
+the point of 4-bit: it is what lets a 7B model fit at all. These are the only measured
+numbers we publish; anything not listed here hasn't been benchmarked.
 
 ## How scheduling works
 
