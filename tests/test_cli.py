@@ -125,3 +125,21 @@ def test_eval_judge_scores_against_labels(env):
     assert result.exit_code == 0, result.output
     assert "acc 100%" in result.output  # same fake judge that produced the labels
     assert "not true accuracy" in result.output  # warns there are no gold labels
+
+
+def test_doctor_checks_each_model(env, monkeypatch):
+    tmp, cfg = env
+    result = runner.invoke(cli.app, ["doctor", "-c", cfg])
+    assert result.exit_code == 0, result.output
+    assert "OK   summary model" in result.output and "OK   embeddings" in result.output
+
+    class NoEmbed(FakeBackend):
+        def embed(self, text, *, prefix=""):
+            from paperboy.backends import BackendError
+
+            raise BackendError("embedding model missing")
+
+    monkeypatch.setattr(cli, "get_backend", lambda c: NoEmbed())
+    result = runner.invoke(cli.app, ["doctor", "-c", cfg])
+    assert result.exit_code == 1
+    assert "FAIL embeddings" in result.output

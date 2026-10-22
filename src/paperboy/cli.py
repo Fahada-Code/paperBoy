@@ -109,16 +109,39 @@ def version() -> None:
 def doctor(
     config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
 ) -> None:
-    """Check that the configured LLM backend is reachable and working."""
+    """Check every model a run will use: summarizer, embeddings, and the judge.
+
+    A missing judge or embedding model would otherwise only surface halfway
+    through a run, after the fetch.
+    """
     cfg = load_config(config)
     typer.echo(f"Backend: {cfg.backend.kind}  model: {cfg.backend.model}  host: {cfg.backend.host}")
     try:
         backend = get_backend(cfg.backend)
-        reply = backend.generate("Reply with the single word: pong")
     except BackendError as exc:
         typer.secho(f"FAIL: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    typer.secho(f"OK - backend responded: {reply[:60]!r}", fg=typer.colors.GREEN)
+
+    checks = [("summary model", cfg.backend.model, lambda: backend.generate("Reply with the single word: pong"))]
+    if cfg.topics:
+        checks.append(
+            ("embeddings", cfg.backend.embed_model, lambda: f"{len(backend.embed_many(['ping'])[0])}-d vector")
+        )
+    if cfg.llm_filter and cfg.topics and cfg.judge_model and cfg.judge_model != cfg.backend.model:
+        judge = get_backend(replace(cfg.backend, model=cfg.judge_model))
+        checks.append(("judge model", cfg.judge_model, lambda: judge.generate("Reply with the single word: pong")))
+
+    failed = 0
+    for name, model, check in checks:
+        try:
+            reply = check()
+        except BackendError as exc:
+            failed += 1
+            typer.secho(f"FAIL {name} ({model}): {exc}", fg=typer.colors.RED, err=True)
+            continue
+        typer.secho(f"OK   {name} ({model}): {reply[:60]!r}", fg=typer.colors.GREEN)
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
