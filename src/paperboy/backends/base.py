@@ -43,6 +43,11 @@ class Backend(ABC):
         """
         raise BackendError(f"{type(self).__name__} does not support embeddings.")
 
+    def embed_many(self, texts: list[str], *, prefix: str = "") -> list[list[float]]:
+        """Embed several texts. Default loops over embed(); backends with a batch
+        endpoint override this, since per-request overhead dominates small texts."""
+        return [self.embed(t, prefix=prefix) for t in texts]
+
     def summarize(self, text: str, *, max_words: int = 150, topic: str | None = None) -> str:
         """Summarize `text` in at most `max_words` words. Composed on top of generate().
 

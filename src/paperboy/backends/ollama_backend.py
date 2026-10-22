@@ -83,3 +83,36 @@ class OllamaBackend(Backend):
             raise BackendError(f"Ollama embeddings returned {resp.status_code}: {resp.text[:200]}") from exc
 
         return [float(x) for x in resp.json().get("embedding", [])]
+
+    # Ollama has a fixed ~2s cost per embedding request on some setups (measured
+    # on the RTX 4050 laptop), so one request per paper made ranking 60 papers
+    # take ~150s. /api/embed takes a list and returns the same vectors.
+    EMBED_BATCH = 32
+
+    def embed_many(self, texts: list[str], *, prefix: str = "") -> list[list[float]]:
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.EMBED_BATCH):
+            chunk = [f"{prefix}{t}" for t in texts[i : i + self.EMBED_BATCH]]
+            try:
+                resp = httpx.post(
+                    f"{self.host}/api/embed",
+                    json={"model": self.embed_model, "input": chunk},
+                    timeout=self.timeout,
+                )
+            except httpx.ConnectError as exc:
+                raise BackendError(f"Can't reach Ollama at {self.host}. Is it running?") from exc
+            except httpx.TimeoutException as exc:
+                raise BackendError(f"Ollama timed out after {self.timeout}s embedding a batch.") from exc
+            if resp.status_code == 404:
+                # Old Ollama without /api/embed, or the model isn't pulled: fall
+                # back to one-at-a-time, which also gives the clearer error.
+                return out + [self.embed(t, prefix=prefix) for t in texts[i:]]
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise BackendError(f"Ollama embed returned {resp.status_code}: {resp.text[:200]}") from exc
+            vecs = resp.json().get("embeddings", [])
+            if len(vecs) != len(chunk):
+                raise BackendError(f"Ollama returned {len(vecs)} embeddings for {len(chunk)} inputs.")
+            out.extend([float(x) for x in v] for v in vecs)
+        return out
