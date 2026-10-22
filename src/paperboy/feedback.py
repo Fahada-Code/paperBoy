@@ -113,3 +113,53 @@ def read_manifest(path: str | Path) -> list[dict[str, str]]:
     except json.JSONDecodeError:
         return []
     return data if isinstance(data, list) else []
+
+
+def _split_threshold(points: list[tuple[float, bool]]) -> float:
+    """The score cut that best separates gate keeps from drops (keep if score >= t)."""
+    if not points:
+        return 0.5
+    values = sorted({s for s, _ in points})
+    candidates = [values[0]] + [(a + b) / 2 for a, b in zip(values, values[1:])] + [values[-1] + 1e-9]
+    best_t, best_acc = 0.5, -1
+    for t in candidates:
+        acc = sum(1 for s, keep in points if (s >= t) == keep)
+        if acc > best_acc:
+            best_acc, best_t = acc, t
+    return best_t
+
+
+def review_queue(events: list[dict[str, Any]], n: int) -> tuple[list[dict[str, Any]], float]:
+    """Pick the unrated papers where a human rating teaches the most.
+
+    Gold labels are scarce, so spend them on the margin, not on obvious calls.
+    Priority: (1) papers that different gate runs judged differently, (2) papers
+    where the gate and the embedding score disagree (kept despite a low score,
+    or dropped despite a high one), then (3) everything else, nearest the score
+    cut first. Returns (queue of latest gate events, the score cut used).
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    verdicts: dict[str, set[str]] = {}
+    rated: set[str] = set()
+    for e in events:
+        aid = e.get("arxiv_id", "")
+        if e.get("kind") == "gate":
+            latest[aid] = e
+            verdicts.setdefault(aid, set()).add(e.get("verdict", ""))
+        elif e.get("kind") == "rating":
+            rated.add(aid)
+
+    pool = [e for aid, e in latest.items() if aid not in rated]
+    t = _split_threshold([(e.get("score", 0.0), e.get("verdict") == "keep") for e in latest.values()])
+
+    def _key(e: dict[str, Any]) -> tuple[int, float]:
+        s, keep = e.get("score", 0.0), e.get("verdict") == "keep"
+        if len(verdicts[e["arxiv_id"]]) > 1:
+            tier = 0
+        elif keep != (s >= t):
+            tier = 1
+        else:
+            tier = 2
+        return tier, abs(s - t)
+
+    return sorted(pool, key=_key)[:n], t

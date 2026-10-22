@@ -65,3 +65,37 @@ def test_manifest_roundtrip(tmp_path):
     write_manifest(path, items)
     assert read_manifest(path) == items
     assert read_manifest(tmp_path / "missing.json") == []
+
+
+def _g(aid, verdict, score):
+    return {"kind": "gate", "arxiv_id": aid, "verdict": verdict, "score": score, "title": aid}
+
+
+def test_review_queue_puts_margin_cases_first():
+    from paperboy.feedback import review_queue
+
+    events = [
+        _g("easy_keep", "keep", 0.80),
+        _g("easy_drop", "drop", 0.38),
+        _g("other_drop", "drop", 0.42),
+        _g("near_cut", "keep", 0.62),
+        _g("conflict", "keep", 0.30),  # kept despite a low score
+        _g("flip", "drop", 0.75),
+        _g("flip", "keep", 0.75),  # two runs disagreed
+        _g("done", "drop", 0.41),
+        {"kind": "rating", "arxiv_id": "done", "verdict": "bad"},  # already rated -> skipped
+    ]
+    queue, t = review_queue(events, 10)
+    ids = [e["arxiv_id"] for e in queue]
+    assert ids[0] == "flip" and ids[1] == "conflict"
+    assert "done" not in ids
+    assert ids.index("near_cut") < ids.index("easy_drop")
+    assert 0.42 < t < 0.62
+
+
+def test_review_queue_respects_n_and_empty():
+    from paperboy.feedback import review_queue
+
+    assert review_queue([], 5) == ([], 0.5)
+    events = [_g(str(i), "keep", 0.5 + i / 100) for i in range(10)]
+    assert len(review_queue(events, 3)[0]) == 3
