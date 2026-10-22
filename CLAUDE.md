@@ -95,7 +95,7 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       (multiple successful cron runs Oct 11-15). HARDENING (2026-10-15): fetch_arxiv now retries
       transient failures (timeouts, conn errors, 5xx) with exponential backoff - a single arXiv
       read-timeout had killed the Oct 14 run. Ollama model blobs now cached in the workflow
-      (actions/cache on ~/.ollama/models). Deferred: structured run metrics/logging.
+      (actions/cache on ~/.ollama/models). Structured run metrics DONE (2026-10-22, see Phase 6 notes: metrics.py, `paperboy stats`).
 - [~] **Phase 6** — training data foundation (feedback loop). DECISION (2026-10-20): before any
       fine-tune/re-ranker, capture labels - training's real bottleneck is data, not compute. New
       module feedback.py + `data_dir` config (default ./data, gitignored). `run` now logs every
@@ -173,6 +173,14 @@ Don't propose "deploy the model to AWS free tier" — it won't fit.
       (3) nearest that cut. Shown blind (abstract + url), judge verdict revealed after answering;
       prints judge-vs-you agreement. Next: Fahad rates ~20-30 via `rate -r 30`, then re-run
       `eval-judge --gold-only` for an honest judge baseline.
+      RUN METRICS + FAST RANK (2026-10-22): metrics.py logs one line per `run` to data/runs.jsonl
+      (status ok|empty|failed + failed_stage, per-stage seconds, fetched/shortlisted/gate kept/
+      dropped/selected, score range, models); `paperboy stats` prints recent runs + means. First
+      measurement exposed ranking at 158s of a 235s run: Ollama on this laptop costs ~2.3s PER
+      embedding request regardless of size. Fix: Backend.embed_many (default loops) + Ollama
+      override using batched /api/embed (32/request, identical vectors - cosine 1.0 vs legacy,
+      404 -> falls back to per-item). rank_papers takes embed_many. Rank 158s -> 8s, run 235s -> 74s.
+      The gate (~4s/paper, 12 papers) is now the largest stage.
 - [ ] **Phase 5** — PyPI release, README demo (asciinema), CONTRIBUTING, examples.
       DECISION (2026-10-15): Fahad wants paperBoy great FOR HIM first; PyPI/pip release DEFERRED to
       the end (prioritize digest quality over distribution). README/CONTRIBUTING/examples drafted
