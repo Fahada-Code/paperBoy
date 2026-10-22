@@ -210,6 +210,7 @@ python -m venv .venv
 - Keep dependencies lean; justify each new one. Prefer stdlib + well-known libraries.
 - Type-hint public functions; keep the CLI thin and push logic into importable modules (testable).
 - Avoid non-ASCII in strings printed to the console (Windows code-page renders em-dashes as `?`).
-- Commit messages: imperative subject, note the phase. End with:
-  `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+- Commits: small and frequent, one logical change each. Messages super short, simple, human
+  sounding, no em dashes, no long bodies. NO Co-Authored-By / Claude attribution - commits must
+  appear solely from Fahad (his git identity).
 - Only commit/push when Fahad asks. Remote: github.com/Fahada-Code/paperBoy (main tracks origin/main).
