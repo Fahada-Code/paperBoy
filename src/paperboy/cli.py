@@ -239,7 +239,9 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
     gate_on = use_filter and bool(cfg.topics)
     shortlist_n = min(max(n * 2, 12), cfg.arxiv.max_results) if gate_on else n
     try:
-        ranked = rank_papers(papers, cfg.topics, backend.embed, shortlist_n, cfg.min_score, reranker)
+        ranked = rank_papers(
+            papers, cfg.topics, backend.embed, shortlist_n, cfg.min_score, reranker, backend.embed_many
+        )
     except BackendError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
@@ -596,7 +598,7 @@ def collect_labels_cmd(
         typer.secho(f"arXiv fetch failed: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
     try:
-        ranked = rank_papers(papers, cfg.topics, backend.embed, pool, 0.0, None)
+        ranked = rank_papers(papers, cfg.topics, backend.embed, pool, 0.0, None, backend.embed_many)
     except BackendError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)

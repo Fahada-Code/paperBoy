@@ -63,3 +63,21 @@ def test_rank_min_score_drops_weak_matches():
     food = _paper("food", title="cooking pasta", abstract="recipes")  # scores 0.0
     out = rank_papers([gpu, food], topics=["gpu"], embed=fake_embed, top_n=5, min_score=0.5)
     assert [p.arxiv_id for p in out] == ["gpu"]
+
+
+def test_rank_uses_batch_embedder_when_given():
+    def fake_embed(text: str, *, prefix: str = "") -> list[float]:
+        t = text.lower()
+        return [1.0 if "gpu" in t else 0.0, 1.0 if "cooking" in t else 0.0]
+
+    calls = []
+
+    def fake_many(texts, *, prefix=""):
+        calls.append(len(texts))
+        return [fake_embed(t) for t in texts]
+
+    papers = [_paper("food", title="cooking pasta"), _paper("gpu", title="GPU inference")]
+    single = rank_papers(list(papers), ["gpu serving"], fake_embed, 2)
+    batched = rank_papers(list(papers), ["gpu serving"], lambda *a, **k: 1 / 0, 2, embed_many=fake_many)
+    assert [p.arxiv_id for p in batched] == [p.arxiv_id for p in single] == ["gpu", "food"]
+    assert calls == [1, 2]  # one request for topics, one for all papers

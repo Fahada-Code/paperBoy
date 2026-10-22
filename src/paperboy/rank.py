@@ -20,6 +20,7 @@ QUERY_PREFIX = "search_query: "
 DOC_PREFIX = "search_document: "
 
 EmbedFn = Callable[..., list[float]]
+EmbedManyFn = Callable[..., list[list[float]]]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -52,6 +53,7 @@ def rank_papers(
     top_n: int,
     min_score: float = 0.0,
     reranker: Reranker | None = None,
+    embed_many: EmbedManyFn | None = None,
 ) -> list[Paper]:
     """Return up to `top_n` papers most relevant to `topics`, scored in place.
 
@@ -72,14 +74,22 @@ def rank_papers(
 
     With no topics configured, relevance is undefined, so we just return the most
     recent papers (the arXiv fetch is already sorted newest-first).
+
+    Pass `embed_many` (a batch version of `embed`) to embed all papers in a few
+    requests instead of one each - much faster on Ollama.
     """
     papers = _dedup(papers)
     if not topics:
         return papers[:top_n]
 
-    topic_vecs = [(t, embed(t, prefix=QUERY_PREFIX)) for t in topics]
-    for p in papers:
-        doc_vec = embed(p.rank_text, prefix=DOC_PREFIX)
+    if embed_many is None:
+
+        def embed_many(texts: list[str], *, prefix: str = "") -> list[list[float]]:
+            return [embed(t, prefix=prefix) for t in texts]
+
+    topic_vecs = list(zip(topics, embed_many(topics, prefix=QUERY_PREFIX)))
+    doc_vecs = embed_many([p.rank_text for p in papers], prefix=DOC_PREFIX)
+    for p, doc_vec in zip(papers, doc_vecs):
         sims = [(_cosine(doc_vec, tv), t) for t, tv in topic_vecs]
         best_sim, p.matched_topic = max(sims, key=lambda st: st[0])
         if reranker is not None:
