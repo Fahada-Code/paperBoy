@@ -77,6 +77,10 @@ def build_judge_examples(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "completion": build_completion(verdict, reason),
                 "label": 1 if verdict in ("keep", "good") else 0,
                 "source": source,  # "gate" (weak) or "rating" (gold)
+                # raw fields so eval can rebuild either judge prompt (few-shot or tuned)
+                "topics": list(topics),
+                "title": title,
+                "abstract": abstract,
             }
         )
     return examples
