@@ -29,6 +29,7 @@ from .feedback import (
     write_manifest,
 )
 from .filter import filter_relevant
+from .history import drop_seen, load_seen, mark_seen
 from .metrics import RunMetrics, append_run, load_runs, summarize_runs
 from .rank import DOC_PREFIX, QUERY_PREFIX, _cosine, rank_papers
 from .reranker import (
@@ -45,6 +46,7 @@ LABELS_FILE = "labels.jsonl"
 MANIFEST_FILE = "last_digest.json"
 RERANKER_FILE = "reranker.json"
 RUNS_FILE = "runs.jsonl"
+SEEN_FILE = "seen.json"
 
 
 def _log_gate_events(cfg, judge_name: str, gate_log: list, selected_ids: set[str]) -> None:
@@ -155,8 +157,15 @@ def run(
     reranker_opt: bool = typer.Option(
         None, "--reranker/--no-reranker", help="Use the learned re-ranker if trained (overrides config)."
     ),
+    include_seen: bool = typer.Option(
+        False, "--include-seen", help="Allow papers an earlier digest already delivered."
+    ),
 ) -> None:
-    """Run the full pipeline: fetch -> rank -> summarize -> PDF digest."""
+    """Run the full pipeline: fetch -> rank -> summarize -> PDF digest.
+
+    Papers delivered by an earlier digest are skipped (data_dir/seen.json), so a
+    day with nothing new gives a short or empty brief instead of repeats.
+    """
     cfg = load_config(config)
     n = top_n or cfg.top_n
     out_format = (fmt or cfg.output.format).lower()
@@ -180,7 +189,7 @@ def run(
         embed_model=cfg.backend.embed_model,
     )
     try:
-        _pipeline(cfg, n, out_format, use_filter, reranker, m)
+        _pipeline(cfg, n, out_format, use_filter, reranker, m, skip_seen=not include_seen)
     except BaseException:
         m.finish("failed")
         _log_run(cfg, m)
@@ -202,7 +211,9 @@ def _log_run(cfg, m: RunMetrics) -> None:
         typer.secho(f"  (could not write run metrics: {exc})", fg=typer.colors.YELLOW, err=True)
 
 
-def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMetrics) -> None:
+def _pipeline(
+    cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMetrics, skip_seen: bool = True
+) -> None:
     """fetch -> rank -> gate -> summarize -> render, recording metrics into `m`."""
     m.mark("setup")
     try:
@@ -227,6 +238,13 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
         raise typer.Exit(code=1)
     typer.echo(f"  fetched {len(papers)} papers.")
     m.fetched = len(papers)
+    seen_path = Path(cfg.data_dir) / SEEN_FILE
+    if skip_seen:
+        fresh = drop_seen(papers, load_seen(seen_path))
+        m.skipped_seen = len(papers) - len(fresh)
+        if m.skipped_seen:
+            typer.echo(f"  skipped {m.skipped_seen} already delivered in an earlier digest (--include-seen to keep).")
+        papers = fresh
 
     # 2. rank (embeddings). With the LLM gate on, shortlist more candidates than
     # we need, then let the gate trim them back down to the top N.
@@ -276,7 +294,9 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
     # 2c. Capture gate verdicts as weak training labels.
     _log_gate_events(cfg, judge_name, gate_log, selected_ids={p.arxiv_id for p in top})
 
-    if cfg.topics and not top:
+    if not papers:
+        typer.secho("  nothing new since the last digest; writing an empty brief.", fg=typer.colors.YELLOW)
+    elif cfg.topics and not top:
         gate_note = " and LLM gate" if gate_on else ""
         typer.secho(
             f"  nothing cleared the relevance floor (min_score={cfg.min_score}){gate_note}; "
@@ -317,15 +337,17 @@ def _pipeline(cfg, n: int, out_format: str, use_filter: bool, reranker, m: RunMe
     typer.secho(f"Digest written: {path}", fg=typer.colors.GREEN)
     m.output = str(path)
 
-    # Record what made this digest so `paperboy rate` can ask about it later.
+    # Record what made this digest so `paperboy rate` can ask about it later,
+    # and so tomorrow's digest doesn't repeat it.
     if top:
         try:
             write_manifest(
                 Path(cfg.data_dir) / MANIFEST_FILE,
                 [{"arxiv_id": p.arxiv_id, "title": p.title, "url": p.url} for p in top],
             )
+            mark_seen(seen_path, top)
         except OSError:
-            pass  # manifest is a convenience; never fail a run over it
+            pass  # convenience files; never fail a run over them
 
 
 @app.command()

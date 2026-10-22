@@ -25,6 +25,7 @@ class RunMetrics:
     judge_model: str = ""
     embed_model: str = ""
     fetched: int = 0
+    skipped_seen: int = 0  # already delivered by an earlier digest
     shortlisted: int = 0
     gate_kept: int = 0
     gate_dropped: int = 0
