@@ -23,6 +23,7 @@ from .feedback import (
     append_events,
     load_events,
     read_manifest,
+    review_queue,
     summarize_events,
     write_manifest,
 )
@@ -277,11 +278,13 @@ def rate(
     verdict: str = typer.Argument(None, help="good | bad (required when arxiv_id is given)."),
     config: str = typer.Option("config.yaml", "--config", "-c", help="Path to config file."),
     note: str = typer.Option("", "--note", help="Optional note stored with the rating."),
+    review: int = typer.Option(0, "--review", "-r", help="Rate the N most borderline logged papers."),
 ) -> None:
     """Record your good/bad judgment on digest papers - the gold labels for training.
 
     `paperboy rate 2610.12345 good` rates one paper; `paperboy rate` with no args
-    walks the most recent digest and asks about each paper.
+    walks the most recent digest and asks about each paper; `paperboy rate -r 20`
+    walks the 20 logged papers where your rating teaches the most (the margin).
     """
     cfg = load_config(config)
     labels_path = Path(cfg.data_dir) / LABELS_FILE
@@ -291,6 +294,42 @@ def rate(
             labels_path,
             [LabelEvent(kind="rating", arxiv_id=aid, title=title, url=url, verdict=v, reason=reason)],
         )
+
+    # Review mode: borderline papers from the label store, judged blind.
+    if review > 0:
+        queue, cut = review_queue(load_events(labels_path), review)
+        if not queue:
+            typer.secho("Nothing left to review. Run `paperboy collect-labels` for more.", fg=typer.colors.YELLOW)
+            return
+        typer.echo(
+            f"Reviewing {len(queue)} borderline papers (score cut {cut:.2f}). Is each one relevant to you?\n"
+            "The judge's verdict is shown AFTER you answer so it can't sway you. "
+            "[g]ood / [b]ad / [s]kip / [q]uit"
+        )
+        rated = agreed = 0
+        for i, e in enumerate(queue, 1):
+            abstract = " ".join(e.get("abstract", "").split())
+            typer.secho(f"\n[{i}/{len(queue)}] {e.get('title', '')}", bold=True)
+            typer.echo(f"  score {e.get('score', 0.0):.2f}, closest topic: {e.get('matched_topic', '') or '-'}")
+            typer.echo(f"  {e.get('url', '')}")
+            typer.echo(f"  {abstract[:420]}{'...' if len(abstract) > 420 else ''}")
+            choice = typer.prompt("  relevant?", default="s").strip().lower()
+            if choice in ("q", "quit"):
+                break
+            v = {"g": "good", "good": "good", "b": "bad", "bad": "bad"}.get(choice)
+            if v is None:
+                continue
+            _record(e["arxiv_id"], v, title=e.get("title", ""), url=e.get("url", ""))
+            rated += 1
+            judge_keep = e.get("verdict") == "keep"
+            agreed += judge_keep == (v == "good")
+            typer.echo(f"  judge said {'keep' if judge_keep else 'drop'}: {e.get('reason', '')[:70]}")
+        if rated:
+            typer.secho(
+                f"\nRecorded {rated} gold ratings (judge agreed with you on {agreed}/{rated}).",
+                fg=typer.colors.GREEN,
+            )
+        return
 
     # Direct, scriptable form.
     if arxiv_id is not None:
